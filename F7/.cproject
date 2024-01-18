@@ -48,11 +48,11 @@
 									<listOptionValue builtIn="false" value="../Drivers/STM32F7xx_HAL_Driver/Inc/Legacy"/>
 									<listOptionValue builtIn="false" value="../Drivers/CMSIS/Device/ST/STM32F7xx/Include"/>
 									<listOptionValue builtIn="false" value="../Drivers/CMSIS/Include"/>
-									<listOptionValue builtIn="false" value="../Libs/FreeRTOS/include"/>
-									<listOptionValue builtIn="false" value="../Libs/FreeRTOS/portable"/>
-									<listOptionValue builtIn="false" value="../Libs/FreeRTOS-Plus-TCP/include"/>
-									<listOptionValue builtIn="false" value="../Libs/FreeRTOS-Plus-TCP/portable"/>
-									<listOptionValue builtIn="false" value="../Libs/iperf"/>
+									<listOptionValue builtIn="false" value="/home/jonglaser/Desktop/dev/Projects/STM32_ETH_Test/Libs/iperf"/>
+									<listOptionValue builtIn="false" value="/home/jonglaser/Desktop/dev/Projects/STM32_ETH_Test/Libs/FreeRTOS-Plus-TCP/portable"/>
+									<listOptionValue builtIn="false" value="/home/jonglaser/Desktop/dev/Projects/STM32_ETH_Test/Libs/FreeRTOS-Plus-TCP/include"/>
+									<listOptionValue builtIn="false" value="/home/jonglaser/Desktop/dev/Projects/STM32_ETH_Test/Libs/FreeRTOS/portable"/>
+									<listOptionValue builtIn="false" value="/home/jonglaser/Desktop/dev/Projects/STM32_ETH_Test/Libs/FreeRTOS/include"/>
 								</option>
 								<option id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.languagestandard.780876284" name="Language standard" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.languagestandard" useByScannerDiscovery="true" value="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.languagestandard.value.gnu18" valueType="enumerated"/>
 								<inputType id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c.512090211" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c"/>
@@ -131,11 +131,11 @@
 									<listOptionValue builtIn="false" value="../Drivers/STM32F7xx_HAL_Driver/Inc/Legacy"/>
 									<listOptionValue builtIn="false" value="../Drivers/CMSIS/Device/ST/STM32F7xx/Include"/>
 									<listOptionValue builtIn="false" value="../Drivers/CMSIS/Include"/>
-									<listOptionValue builtIn="false" value="../Libs/FreeRTOS/include"/>
-									<listOptionValue builtIn="false" value="../Libs/FreeRTOS/portable"/>
-									<listOptionValue builtIn="false" value="../Libs/FreeRTOS-Plus-TCP/include"/>
-									<listOptionValue builtIn="false" value="../Libs/FreeRTOS-Plus-TCP/portable"/>
-									<listOptionValue builtIn="false" value="../Libs/iperf"/>
+									<listOptionValue builtIn="false" value="/home/jonglaser/Desktop/dev/Projects/STM32_ETH_Test/Libs/iperf"/>
+									<listOptionValue builtIn="false" value="/home/jonglaser/Desktop/dev/Projects/STM32_ETH_Test/Libs/FreeRTOS-Plus-TCP/portable"/>
+									<listOptionValue builtIn="false" value="/home/jonglaser/Desktop/dev/Projects/STM32_ETH_Test/Libs/FreeRTOS-Plus-TCP/include"/>
+									<listOptionValue builtIn="false" value="/home/jonglaser/Desktop/dev/Projects/STM32_ETH_Test/Libs/FreeRTOS/portable"/>
+									<listOptionValue builtIn="false" value="/home/jonglaser/Desktop/dev/Projects/STM32_ETH_Test/Libs/FreeRTOS/include"/>
 								</option>
 								<option id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.languagestandard.170132750" name="Language standard" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.languagestandard" useByScannerDiscovery="true" value="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.languagestandard.value.gnu18" valueType="enumerated"/>
 								<inputType id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c.401147369" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c"/>
@@ -165,7 +165,7 @@
 					<sourceEntries>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Core"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Drivers"/>
-						<entry flags="VALUE_WORKSPACE_PATH" kind="sourcePath" name="Libs"/>
+						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Libs"/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>

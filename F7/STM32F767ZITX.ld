@@ -45,9 +45,7 @@ _Min_Stack_Size = 0x800; /* required amount of stack */
 MEMORY
 {
   FLASH    (rx)    : ORIGIN = 0x8000000,   LENGTH = 2048K
-  RAM    (xrw)    : ORIGIN = 0x20000000,   LENGTH = 128K
-  SRAM1         (rwx) : ORIGIN = 0x20020000, LENGTH = 368K
-  SRAM2         (rwx) : ORIGIN = 0x2007C000, LENGTH = 16K
+  RAM    (xrw)    : ORIGIN = 0x20000000,   LENGTH = 512K
 }
 
 /* Sections */
@@ -177,12 +175,12 @@ SECTIONS
 
   .EthBuffersBlock (NOLOAD) :
     {
-        . = ALIGN(128K);
+        . = ALIGN(64K);
         __ETH_BUFFERS_START = .;
         *(.EthBuffersSection)
-        . = ALIGN(128K);
+        . = ALIGN(64K);
         __ETH_BUFFERS_END = .;
-    } > SRAM1
+    } > RAM
 
     .EthDescriptorsBlock (NOLOAD) :
     {
@@ -192,7 +190,7 @@ SECTIONS
         *(.TxDescripSection)
         . = ALIGN(1K);
         __ETH_DESCRIPTORS_END = .;
-    } > SRAM2
+    } > RAM
 
   /* Remove information from the compiler libraries */
   /DISCARD/ :

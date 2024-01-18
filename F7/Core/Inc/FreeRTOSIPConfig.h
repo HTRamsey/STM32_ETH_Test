@@ -27,7 +27,7 @@
 #define ipconfigNETWORK_MTU                             1500U
 // #define ipconfigETHERNET_MINIMUM_PACKET_BYTES           60U
 #define ipconfigUDP_MAX_RX_PACKETS                      50U
-#define ipconfigNUM_NETWORK_BUFFER_DESCRIPTORS          50U
+#define ipconfigNUM_NETWORK_BUFFER_DESCRIPTORS          40U
 #define ipconfigIP_TASK_STACK_SIZE_WORDS                ( configMINIMAL_STACK_SIZE * 4 )
 #define ipconfigSOCKET_HAS_USER_SEMAPHORE               0
 #define ipconfigWATCHDOG_TIMER()

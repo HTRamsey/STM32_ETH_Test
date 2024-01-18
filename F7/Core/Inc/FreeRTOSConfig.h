@@ -17,7 +17,7 @@ extern uint32_t SystemCoreClock;
 #define configTICK_RATE_HZ                      ((TickType_t)1000)
 #define configMAX_PRIORITIES                    5
 #define configMINIMAL_STACK_SIZE                ((configSTACK_DEPTH_TYPE)256)
-#define configTOTAL_HEAP_SIZE                   ((size_t)(96U * 1024U))
+#define configTOTAL_HEAP_SIZE                   ((size_t)(352U * 1024U))
 #define configAPPLICATION_ALLOCATED_HEAP 		0
 #define configUSE_MALLOC_FAILED_HOOK            1
 #define configNUM_THREAD_LOCAL_STORAGE_POINTERS 1
