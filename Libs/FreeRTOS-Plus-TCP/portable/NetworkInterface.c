@@ -133,11 +133,13 @@
 #define niEMAC_RX_DESC_SECTION    ".RxDescripSection"
 #define niEMAC_BUFFERS_SECTION    ".EthBuffersSection"
 
-#define niEMAC_ALIGNMENT        portBYTE_ALIGNMENT /* or should this always be 4? */
-#define niEMAC_ALIGNMENT_MASK   portBYTE_ALIGNMENT_MASK /* or should this always be 3? */
+#define niEMAC_DATA_ALIGNMENT        4
+#define niEMAC_DATA_ALIGNMENT_MASK   ( niEMAC_DATA_ALIGNMENT - 1 )
+#define niEMAC_BUF_ALIGNMENT        32
+#define niEMAC_BUF_ALIGNMENT_MASK   ( niEMAC_BUF_ALIGNMENT - 1 )
 
-#define niEMAC_DATA_BUFFER_SIZE     ( ( ipTOTAL_ETHERNET_FRAME_SIZE + portBYTE_ALIGNMENT_MASK ) & ~portBYTE_ALIGNMENT_MASK )
-#define niEMAC_TOTAL_BUFFER_SIZE    ( ( ( niEMAC_DATA_BUFFER_SIZE + ipBUFFER_PADDING ) + niEMAC_ALIGNMENT_MASK ) & ~niEMAC_ALIGNMENT_MASK )
+#define niEMAC_DATA_BUFFER_SIZE     ( ( ipTOTAL_ETHERNET_FRAME_SIZE + niEMAC_DATA_ALIGNMENT_MASK ) & ~niEMAC_DATA_ALIGNMENT_MASK )
+#define niEMAC_TOTAL_BUFFER_SIZE    ( ( ( niEMAC_DATA_BUFFER_SIZE + ipBUFFER_PADDING ) + niEMAC_BUF_ALIGNMENT_MASK ) & ~niEMAC_BUF_ALIGNMENT_MASK )
 
 #define niEMAC_MAX_BLOCK_TIME_MS        100U
 #define niEMAC_DESCRIPTOR_WAIT_TIME_MS  200U
@@ -1438,7 +1440,7 @@ void HAL_ETH_TxFreeCallback( uint32_t * pulBuff )
 
 void vNetworkInterfaceAllocateRAMToBuffers( NetworkBufferDescriptor_t pxNetworkBuffers[ ipconfigNUM_NETWORK_BUFFER_DESCRIPTORS ] )
 {
-    static uint8_t ucNetworkPackets[ ipconfigNUM_NETWORK_BUFFER_DESCRIPTORS ][ niEMAC_TOTAL_BUFFER_SIZE ] __ALIGNED( niEMAC_ALIGNMENT ) __attribute__( ( section( niEMAC_BUFFERS_SECTION ) ) );
+    static uint8_t ucNetworkPackets[ ipconfigNUM_NETWORK_BUFFER_DESCRIPTORS ][ niEMAC_TOTAL_BUFFER_SIZE ] __ALIGNED( niEMAC_BUF_ALIGNMENT ) __attribute__( ( section( niEMAC_BUFFERS_SECTION ) ) );
 
     configASSERT( xBufferAllocFixedSize == pdTRUE );
 
@@ -1680,7 +1682,7 @@ void MPU_Config(void)
     MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL0;
     MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
     MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_DISABLE;
-    MPU_InitStruct.IsShareable = MPU_ACCESS_NOT_SHAREABLE;
+    MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
     MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
     MPU_InitStruct.IsBufferable = MPU_ACCESS_BUFFERABLE;
 
