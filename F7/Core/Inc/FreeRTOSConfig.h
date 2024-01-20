@@ -39,12 +39,12 @@ extern uint32_t SystemCoreClock;
 #define configCHECK_FOR_STACK_OVERFLOW          1
 #define configUSE_SB_COMPLETED_CALLBACK         0
 
-#define configGENERATE_RUN_TIME_STATS           0
+#define configGENERATE_RUN_TIME_STATS           1
 extern void vConfigureTimerForRunTimeStats( void );
 extern uint32_t vGetRunTimeCounterValue( void );
 #define portCONFIGURE_TIMER_FOR_RUN_TIME_STATS()   vConfigureTimerForRunTimeStats()
 #define portGET_RUN_TIME_COUNTER_VALUE()           vGetRunTimeCounterValue()
-#define configUSE_TRACE_FACILITY                0
+#define configUSE_TRACE_FACILITY                1
 
 #define configUSE_TIMERS                        1
 #define configTIMER_TASK_PRIORITY               3

@@ -141,7 +141,9 @@
 #define niEMAC_DATA_BUFFER_SIZE     ( ( ipTOTAL_ETHERNET_FRAME_SIZE + niEMAC_DATA_ALIGNMENT_MASK ) & ~niEMAC_DATA_ALIGNMENT_MASK )
 #define niEMAC_TOTAL_BUFFER_SIZE    ( ( ( niEMAC_DATA_BUFFER_SIZE + ipBUFFER_PADDING ) + niEMAC_BUF_ALIGNMENT_MASK ) & ~niEMAC_BUF_ALIGNMENT_MASK )
 
-#define niEMAC_MAX_BLOCK_TIME_MS        100U
+#define niEMAC_TASK_MAX_BLOCK_TIME_MS 	100U
+#define niEMAC_TX_MAX_BLOCK_TIME_MS     20U
+#define niEMAC_RX_MAX_BLOCK_TIME_MS     20U
 #define niEMAC_DESCRIPTOR_WAIT_TIME_MS  200U
 
 #define niEMAC_TASK_NAME        "EMAC_STM32"
@@ -163,6 +165,8 @@
 
 #define niEMAC_BUFS_PER_DESC 2
 
+#define niEMAC_MAC_SRC_MATCH_COUNT 3
+
 /* IEEE 802.3 CRC32 polynomial - 0x04C11DB7 */
 #define niEMAC_CRC_POLY 0x04C11DB7
 
@@ -174,6 +178,9 @@
 #define niPHY_IMR_LINK_DOWN 0x0010*/
 
 #define niEMAC_MAC_IS_MULTICAST( pucMacAddress ) ( ( pucMacAddress[ 0 ] & 1U ) != 0 )
+
+/* Non fatal debug check */
+#define niEMAC_DEBUG( X, MSG ) if( ( X ) == 0 ) { FreeRTOS_debug_printf( ( MSG ) ); }
 
 /*---------------------------------------------------------------------------*/
 /*===========================================================================*/
@@ -282,10 +289,9 @@ static BaseType_t xSwitchRequired;
 static eMAC_INIT_STATUS_TYPE xMacInitStatus = eMacEthInit;
 
 /* Store previously matched addresses for easy checking */
-static MACAddress_t xMatchedMacAddresses[ 3 ] = { 0 };
+static MACAddress_t xMatchedMacAddresses[ niEMAC_MAC_SRC_MATCH_COUNT ] = { 0 };
 
-/* ETH_MAC_ADDRESS0 reserved for the primary MAC-address. */
-static UBaseType_t uxMACEntry = ETH_MAC_ADDRESS1;
+static uint8_t uxMACEntryIndex = 0;
 
 /*---------------------------------------------------------------------------*/
 /*===========================================================================*/
@@ -358,6 +364,7 @@ static BaseType_t prvNetworkInterfaceInitialise( NetworkInterface_t * pxInterfac
         case eMacEthInit:
             if( prvEthConfigInit( pxEthHandle, pxInterface ) == pdFALSE )
             {
+                FreeRTOS_debug_printf( ( "prvNetworkInterfaceInitialise: eMacEthInit failed\n" ) );
                 break;
             }
 
@@ -369,6 +376,7 @@ static BaseType_t prvNetworkInterfaceInitialise( NetworkInterface_t * pxInterfac
 
             if( xPhyDiscover( pxPhyObject ) == 0 )
             {
+                FreeRTOS_debug_printf( ( "prvNetworkInterfaceInitialise: eMacPhyInit failed\n" ) );
                 break;
             }
 
@@ -378,6 +386,7 @@ static BaseType_t prvNetworkInterfaceInitialise( NetworkInterface_t * pxInterfac
         case eMacPhyStart:
             if( prvPhyStart( pxEthHandle, pxInterface, pxPhyObject ) == pdFALSE )
             {
+                FreeRTOS_debug_printf( ( "prvNetworkInterfaceInitialise: eMacPhyStart failed\n" ) );
                 break;
             }
 
@@ -387,6 +396,7 @@ static BaseType_t prvNetworkInterfaceInitialise( NetworkInterface_t * pxInterfac
         case eMacTaskStart:
             if( prvEMACTaskStart( pxInterface ) == pdFALSE )
             {
+                FreeRTOS_debug_printf( ( "prvNetworkInterfaceInitialise: eMacTaskStart failed\n" ) );
                 break;
             }
 
@@ -398,6 +408,7 @@ static BaseType_t prvNetworkInterfaceInitialise( NetworkInterface_t * pxInterfac
             {
                 if( HAL_ETH_Start_IT( pxEthHandle ) != HAL_OK )
                 {
+                    FreeRTOS_debug_printf( ( "prvNetworkInterfaceInitialise: eMacEthStart failed\n" ) );
                     break;
                 }
             }
@@ -406,10 +417,13 @@ static BaseType_t prvNetworkInterfaceInitialise( NetworkInterface_t * pxInterfac
             /* fallthrough */
 
         case eMacInitComplete:
-            if( prvGetPhyLinkStatus( pxInterface ) == pdTRUE )
+            if( prvGetPhyLinkStatus( pxInterface ) != pdTRUE )
             {
-                xInitResult = pdPASS;
+                FreeRTOS_debug_printf( ( "prvNetworkInterfaceInitialise: eMacInitComplete failed\n" ) );
+                break;
             }
+
+            xInitResult = pdPASS;
     }
 
     return xInitResult;
@@ -456,7 +470,7 @@ static BaseType_t prvNetworkInterfaceOutput( NetworkInterface_t * pxInterface, N
             break;
         }
 
-        if( xSemaphoreTake( xTxMutex, pdMS_TO_TICKS( niEMAC_MAX_BLOCK_TIME_MS ) ) == pdFALSE )
+        if( xSemaphoreTake( xTxMutex, pdMS_TO_TICKS( niEMAC_TX_MAX_BLOCK_TIME_MS ) ) == pdFALSE )
         {
             FreeRTOS_debug_printf( ( "xNetworkInterfaceOutput: Process Busy\n" ) );
             /* TODO: Can we queue it? */
@@ -492,12 +506,9 @@ static BaseType_t prvNetworkInterfaceOutput( NetworkInterface_t * pxInterface, N
         }
         else
         {
-            configASSERT( ( pxEthHandle->ErrorCode & HAL_ETH_ERROR_PARAM ) == 0 );
             configASSERT( pxEthHandle->gState == HAL_ETH_STATE_STARTED );
-            if( pxEthHandle->ErrorCode & HAL_ETH_ERROR_BUSY )
-            {
-                FreeRTOS_debug_printf( ( "xNetworkInterfaceOutput: Tx Busy\n" ) );
-            }
+            niEMAC_DEBUG( ( pxEthHandle->ErrorCode & HAL_ETH_ERROR_BUSY ) == 0, "xNetworkInterfaceOutput: Tx Busy\n" );
+            /* Add to queue? */
         }
         ( void ) xSemaphoreGive( xTxMutex );
 
@@ -515,10 +526,11 @@ static BaseType_t prvNetworkInterfaceOutput( NetworkInterface_t * pxInterface, N
 
 static void prvAddAllowedMACAddress( const uint8_t * pucMacAddress )
 {
-    configASSERT( pucMacAddress );
+    /* ETH_MAC_ADDRESS0 reserved for the primary MAC-address. */
+    static const uint32_t xMacAddressEntries[ niEMAC_MAC_SRC_MATCH_COUNT ] = { ETH_MAC_ADDRESS1, ETH_MAC_ADDRESS2, ETH_MAC_ADDRESS3 };
 
     BaseType_t xFound = pdFALSE;
-    for( UBaseType_t uxIndex = 0; uxIndex < ARRAY_SIZE( xMatchedMacAddresses ); ++uxIndex )
+    for( UBaseType_t uxIndex = 0; ( uxIndex < ARRAY_SIZE( xMatchedMacAddresses ) ) && ( uxIndex < uxMACEntryIndex ); ++uxIndex )
     {
         /* Temporary inefficient method to avoid writing a HAL_ETH_GetSourceMACAddrMatch for Hx & Fx */
         if( memcmp( pucMacAddress, xMatchedMacAddresses[ uxIndex ].ucBytes, ipMAC_ADDRESS_LENGTH_BYTES ) == 0 )
@@ -532,60 +544,39 @@ static void prvAddAllowedMACAddress( const uint8_t * pucMacAddress )
     {
         ETH_HandleTypeDef * pxEthHandle = &xEthHandle;
         ETH_MACFilterConfigTypeDef xFilterConfig;
+        ( void ) HAL_ETH_GetMACFilterConfig( pxEthHandle, &xFilterConfig );
 
-        switch( uxMACEntry )
+        if( uxMACEntryIndex < ARRAY_SIZE( xMacAddressEntries ) )
         {
-            case ETH_MAC_ADDRESS1:
-                ( void ) HAL_ETH_SetSourceMACAddrMatch( pxEthHandle, uxMACEntry, ( uint8_t * ) pucMacAddress );
-                ( void ) memcpy( xMatchedMacAddresses[ 0 ].ucBytes, pucMacAddress, ipMAC_ADDRESS_LENGTH_BYTES );
-                uxMACEntry = ETH_MAC_ADDRESS2;
-                /* Only need to do this once, don't repeat for following addresses */
-                ( void ) HAL_ETH_GetMACFilterConfig( pxEthHandle, &xFilterConfig );
-                if( xFilterConfig.HachOrPerfectFilter == DISABLE )
+            ( void ) HAL_ETH_SetSourceMACAddrMatch( pxEthHandle, xMacAddressEntries[ uxMACEntryIndex ], ( uint8_t * ) pucMacAddress );
+            ( void ) memcpy( xMatchedMacAddresses[ uxMACEntryIndex ].ucBytes, pucMacAddress, ipMAC_ADDRESS_LENGTH_BYTES );
+            /* if( xFilterConfig.SrcAddrFiltering == DISABLE )
+            {
+                xFilterConfig.SrcAddrFiltering = ENABLE;
+                ( void ) HAL_ETH_SetMACFilterConfig( pxEthHandle, &xFilterConfig );
+            } */
+        }
+        else
+        {
+            prvUpdateMacHashFilter( pxEthHandle, pucMacAddress );
+            if( niEMAC_MAC_IS_MULTICAST( pucMacAddress ) == pdTRUE )
+            {
+                if( xFilterConfig.HashMulticast == DISABLE )
                 {
-                    xFilterConfig.HachOrPerfectFilter = ENABLE;
+                    xFilterConfig.HashMulticast = ENABLE;
                     ( void ) HAL_ETH_SetMACFilterConfig( pxEthHandle, &xFilterConfig );
                 }
-                break;
-
-            case ETH_MAC_ADDRESS2:
-                ( void ) HAL_ETH_SetSourceMACAddrMatch( pxEthHandle, uxMACEntry, ( uint8_t * ) pucMacAddress );
-                ( void ) memcpy( xMatchedMacAddresses[ 1 ].ucBytes, pucMacAddress, ipMAC_ADDRESS_LENGTH_BYTES );
-                uxMACEntry = ETH_MAC_ADDRESS3;
-                break;
-
-            case ETH_MAC_ADDRESS3:
-                ( void ) HAL_ETH_SetSourceMACAddrMatch( pxEthHandle, uxMACEntry, ( uint8_t * ) pucMacAddress );
-                ( void ) memcpy( xMatchedMacAddresses[ 2 ].ucBytes, pucMacAddress, ipMAC_ADDRESS_LENGTH_BYTES );
-                /* Just used to show that the address registers are filled */
-                uxMACEntry = ETH_MAC_ADDRESS0;
-                break;
-
-            case ETH_MAC_ADDRESS0:
-                prvUpdateMacHashFilter( pxEthHandle, pucMacAddress );
-                ( void ) HAL_ETH_GetMACFilterConfig( pxEthHandle, &xFilterConfig );
-                if( niEMAC_MAC_IS_MULTICAST( pucMacAddress ) == pdTRUE )
+            }
+            else
+            {
+                if( xFilterConfig.HashUnicast == DISABLE )
                 {
-                    if( xFilterConfig.HashMulticast == DISABLE )
-                    {
-                        xFilterConfig.HashMulticast = ENABLE;
-                        ( void ) HAL_ETH_SetMACFilterConfig( pxEthHandle, &xFilterConfig );
-                    }
+                    xFilterConfig.HashUnicast = ENABLE;
+                    ( void ) HAL_ETH_SetMACFilterConfig( pxEthHandle, &xFilterConfig );
                 }
-                else
-                {
-                    if( xFilterConfig.HashUnicast == DISABLE )
-                    {
-                        xFilterConfig.HashUnicast = ENABLE;
-                        ( void ) HAL_ETH_SetMACFilterConfig( pxEthHandle, &xFilterConfig );
-                    }
-                }
-                break;
-
-            default:
-                configASSERT( pdFALSE );
-                break;
+            }
         }
+        ++uxMACEntryIndex;
     }
 }
 
@@ -674,7 +665,6 @@ static BaseType_t prvNetworkInterfaceInput( ETH_HandleTypeDef * pxEthHandle, Net
     }
     else
     {
-        configASSERT( ( pxEthHandle->ErrorCode & HAL_ETH_ERROR_PARAM ) == 0 );
         /*if( pxEthHandle->gState != HAL_ETH_STATE_STARTED )
         {
             ( void ) xTaskNotify( xEMACTaskHandle, eMacEventErrEth, eSetBits );
@@ -690,7 +680,6 @@ static BaseType_t prvNetworkInterfaceInput( ETH_HandleTypeDef * pxEthHandle, Net
 static portTASK_FUNCTION( prvEMACHandlerTask, pvParameters )
 {
     NetworkInterface_t * pxInterface = ( NetworkInterface_t * ) pvParameters;
-    configASSERT( pxInterface );
     ETH_HandleTypeDef * pxEthHandle = &xEthHandle;
     EthernetPhy_t * pxPhyObject = &xPhyObject;
 
@@ -701,7 +690,7 @@ static portTASK_FUNCTION( prvEMACHandlerTask, pvParameters )
         BaseType_t xResult = pdFALSE;
         uint32_t ulISREvents = 0U;
 
-        if( xTaskNotifyWait( 0U, eMacEventAll, &ulISREvents, pdMS_TO_TICKS( niEMAC_MAX_BLOCK_TIME_MS ) ) == pdTRUE )
+        if( xTaskNotifyWait( 0U, eMacEventAll, &ulISREvents, pdMS_TO_TICKS( niEMAC_TASK_MAX_BLOCK_TIME_MS ) ) == pdTRUE )
         {
             if( ( ulISREvents & eMacEventRx ) != 0 )
             {
@@ -710,7 +699,7 @@ static portTASK_FUNCTION( prvEMACHandlerTask, pvParameters )
 
             if( ( ulISREvents & eMacEventTx ) != 0 )
             {
-                if( xSemaphoreTake( xTxMutex, pdMS_TO_TICKS( niEMAC_MAX_BLOCK_TIME_MS ) ) != pdFALSE )
+                if( xSemaphoreTake( xTxMutex, pdMS_TO_TICKS( niEMAC_TX_MAX_BLOCK_TIME_MS ) ) != pdFALSE )
                 {
                     ( void ) HAL_ETH_ReleaseTxPacket( pxEthHandle );
                     ( void ) xSemaphoreGive( xTxMutex );
@@ -728,7 +717,7 @@ static portTASK_FUNCTION( prvEMACHandlerTask, pvParameters )
 
             if( ( ulISREvents & eMacEventErrTx ) != 0 )
             {
-                if( xSemaphoreTake( xTxMutex, pdMS_TO_TICKS( niEMAC_MAX_BLOCK_TIME_MS ) ) != pdFALSE )
+                if( xSemaphoreTake( xTxMutex, pdMS_TO_TICKS( niEMAC_TX_MAX_BLOCK_TIME_MS ) ) != pdFALSE )
                 {
                     ( void ) HAL_ETH_ReleaseTxPacket( pxEthHandle );
                 }
@@ -756,9 +745,6 @@ static portTASK_FUNCTION( prvEMACHandlerTask, pvParameters )
         /* #ifdef niEMAC_STM32HX
             prvUpdatePacketFilter( pxEthHandle, pxInterface );
         #endif */
-
-        /* pxEthHandle->gState == HAL_ETH_STATE_ERROR */
-        /* configASSERT( ( pxEthHandle->ErrorCode & HAL_ETH_ERROR_PARAM ) == 0 ); */
 
         if( xPhyCheckLinkStatus( pxPhyObject, xResult ) != pdFALSE )
         {
@@ -863,9 +849,12 @@ static BaseType_t prvEthConfigInit( ETH_HandleTypeDef * pxEthHandle, const Netwo
         configASSERT( pxEthHandle->Init.RxBuffLen == ETH_RX_BUF_SIZE );
     #endif
 
+	#ifdef niEMAC_STM32HX
+		configASSERT( ETH_TX_DESC_CNT % 4 == 0 );
+		configASSERT( ETH_RX_DESC_CNT % 4 == 0 );
+	#endif
     static ETH_DMADescTypeDef xDMADescTx[ ETH_TX_DESC_CNT ] __ALIGNED( portBYTE_ALIGNMENT ) __attribute__( ( section( niEMAC_TX_DESC_SECTION ) ) );
     static ETH_DMADescTypeDef xDMADescRx[ ETH_RX_DESC_CNT ] __ALIGNED( portBYTE_ALIGNMENT ) __attribute__( ( section( niEMAC_RX_DESC_SECTION ) ) );
-
     pxEthHandle->Init.TxDesc = xDMADescTx;
     pxEthHandle->Init.RxDesc = xDMADescRx;
 
@@ -885,19 +874,37 @@ static BaseType_t prvEthConfigInit( ETH_HandleTypeDef * pxEthHandle, const Netwo
 
         if( HAL_ETH_Init( pxEthHandle ) == HAL_OK )
         {
-            /* ETH_DMAConfigTypeDef xDMAConfig;
-            xDMAConfig.SecondPacketOperate = ENABLE;
-            ( void ) HAL_ETH_SetDMAConfig( pxEthHandle, &xDMAConfig ); */
+        	ETH_MACConfigTypeDef xMACConfig;
+			( void ) HAL_ETH_GetMACConfig( pxEthHandle , &xMACConfig );
+			xMACConfig.ChecksumOffload = ( FunctionalState ) ipconfigIS_ENABLED( ipconfigDRIVER_INCLUDED_RX_IP_CHECKSUM );
+            #ifdef niEMAC_STM32FX
+                xMACConfig.AutomaticPadCRCStrip = ENABLE;
+                xMACConfig.RetryTransmission = ENABLE;
+            #elif defined( niEMAC_STM32HX )
+                xMACConfig.CRCStripTypePacket = DISABLE;
+			#endif
+			( void ) HAL_ETH_SetMACConfig( pxEthHandle, &xMACConfig );
+
+            ETH_DMAConfigTypeDef xDMAConfig;
+            ( void ) HAL_ETH_GetDMAConfig( pxEthHandle, &xDMAConfig );
+            #ifdef niEMAC_STM32FX
+                xDMAConfig.EnhancedDescriptorFormat = ( FunctionalState ) ( ipconfigIS_ENABLED( ipconfigDRIVER_INCLUDED_RX_IP_CHECKSUM ) || ipconfigIS_ENABLED( ipconfigDRIVER_INCLUDED_TX_IP_CHECKSUM ) );
+			#elif defined( niEMAC_STM32HX )
+                /*xDMAConfig.SecondPacketOperate = ENABLE;
+				xDMAConfig.TCPSegmentation = ENABLE;
+				xDMAConfig.MaximumSegmentSize = ipconfigTCP_MSS;*/
+			#endif
+            ( void ) HAL_ETH_SetDMAConfig( pxEthHandle, &xDMAConfig );
+
+            #ifdef niEMAC_STM32HX
+                prvInitPacketFilter( pxEthHandle, pxInterface );
+            #endif
 
             /* #ifdef niEMAC_STM32HX
                 HAL_ETHEx_DisableARPOffload( pxEthHandle );
                 HAL_ETHEx_SetARPAddressMatch( pxEthHandle, ulAddress );
                 HAL_ETHEx_EnableARPOffload( pxEthHandle );
             #endif */
-
-            #ifdef niEMAC_STM32HX
-                prvInitPacketFilter( pxEthHandle, pxInterface );
-            #endif
 
             prvInitMacAddresses( pxEthHandle, pxInterface );
 
@@ -907,18 +914,43 @@ static BaseType_t prvEthConfigInit( ETH_HandleTypeDef * pxEthHandle, const Netwo
 
     if( xResult == pdTRUE )
     {
-        configASSERT( NVIC_GetEnableIRQ( ETH_IRQn ) != 0 );
+        #if defined( __DCACHE_PRESENT ) && ( __DCACHE_PRESENT == 1U )
+            if( _FLD2VAL( SCB_CCR_DC, SCB->CCR ) != 0 )
+            {
+                #if defined( __MPU_PRESENT ) && ( __MPU_PRESENT == 1U )
+                    configASSERT( _FLD2VAL( MPU_CTRL_ENABLE, MPU->CTRL ) != 0 );
+                #else
+                    configASSERT( pdFALSE );
+                #endif
+            }
+        #endif
+
         uint32_t ulPreemptPriority, ulSubPriority;
         HAL_NVIC_GetPriority( ETH_IRQn, HAL_NVIC_GetPriorityGrouping(), &ulPreemptPriority, &ulSubPriority );
-        configASSERT( ulPreemptPriority >= configMAX_FREERTOS_INTERRUPT_PRIORITY );
         if( ulPreemptPriority < configMAX_FREERTOS_INTERRUPT_PRIORITY )
         {
+            FreeRTOS_debug_printf( ( "prvEthConfigInit: Incorrectly set ETH_IRQn priority\n" ) );
             HAL_NVIC_SetPriority( ETH_IRQn, ( uint32_t ) configMAX_FREERTOS_INTERRUPT_PRIORITY, 0 );
         }
         if( NVIC_GetEnableIRQ( ETH_IRQn ) == 0 )
         {
+            FreeRTOS_debug_printf( ( "prvEthConfigInit: ETH_IRQn was not enabled by application\n" ) );
             HAL_NVIC_EnableIRQ( ETH_IRQn );
         }
+    }
+    else
+    {
+        #ifdef niEMAC_STM32FX
+            configASSERT( __HAL_RCC_ETH_IS_CLK_ENABLED() != 0 );
+        #elif defined( STM32H5 )
+            configASSERT( __HAL_RCC_ETH_IS_CLK_ENABLED() != 0 );
+            configASSERT( __HAL_RCC_ETHTX_IS_CLK_ENABLED() != 0 );
+            configASSERT( __HAL_RCC_ETHRX_IS_CLK_ENABLED() != 0 );
+        #elif defined( STM32H7)
+            configASSERT( __HAL_RCC_ETH1MAC_IS_CLK_ENABLED() != 0 );
+            configASSERT( __HAL_RCC_ETH1TX_IS_CLK_ENABLED() != 0 );
+            configASSERT( __HAL_RCC_ETH1RX_IS_CLK_ENABLED() != 0 );
+        #endif
     }
 
     return xResult;
@@ -936,7 +968,7 @@ static void prvInitMacAddresses( ETH_HandleTypeDef * pxEthHandle, const NetworkI
     xFilterConfig.ReceiveAllMode = DISABLE;
     xFilterConfig.PassAllMulticast = DISABLE;
     xFilterConfig.BroadcastFilter = ENABLE;
-    xFilterConfig.SrcAddrFiltering = DISABLE;
+    xFilterConfig.HachOrPerfectFilter = ENABLE;
     xFilterConfig.SrcAddrInverseFiltering = DISABLE;
     xFilterConfig.DestAddrInverseFiltering = DISABLE;
     #ifdef niEMAC_STM32FX
@@ -947,7 +979,7 @@ static void prvInitMacAddresses( ETH_HandleTypeDef * pxEthHandle, const NetworkI
     #endif
 
     /* These are determined later in prvAddAllowedMACAddress, just set default disable */
-    xFilterConfig.HachOrPerfectFilter = DISABLE;
+    xFilterConfig.SrcAddrFiltering = DISABLE;
     xFilterConfig.HashUnicast = DISABLE;
     xFilterConfig.HashMulticast = DISABLE;
 
@@ -1038,7 +1070,6 @@ static BaseType_t prvMacUpdateConfig( ETH_HandleTypeDef * pxEthHandle, EthernetP
 
     ETH_MACConfigTypeDef xMACConfig;
     ( void ) HAL_ETH_GetMACConfig( pxEthHandle , &xMACConfig );
-    xMACConfig.ChecksumOffload = ( FunctionalState ) ipconfigIS_ENABLED( ipconfigDRIVER_INCLUDED_RX_IP_CHECKSUM );
 
     #if ipconfigIS_ENABLED( niEMAC_AUTO_NEGOTIATION )
         /* TODO: xPhyStartAutoNegotiation always returns 0, Should return -1 if xPhyGetMask == 0 ? */
@@ -1141,7 +1172,7 @@ static void prvSendRxEvent( NetworkBufferDescriptor_t * const pxDescriptor )
         .eEventType = eNetworkRxEvent,
         .pvData = ( void * ) pxDescriptor
     };
-    if( xSendEventStructToIPTask( &xRxEvent, pdMS_TO_TICKS( niEMAC_MAX_BLOCK_TIME_MS ) ) != pdPASS )
+    if( xSendEventStructToIPTask( &xRxEvent, pdMS_TO_TICKS( niEMAC_RX_MAX_BLOCK_TIME_MS ) ) != pdPASS )
     {
         iptraceETHERNET_RX_EVENT_LOST();
         FreeRTOS_debug_printf( ( "prvSendRxEvent: xSendEventStructToIPTask failed\n" ) );
@@ -1161,47 +1192,52 @@ static void prvInitPacketFilter( ETH_HandleTypeDef * pxEthHandle, const NetworkI
 {
     HAL_ETHEx_DisableL3L4Filtering( pxEthHandle );
 
-    const uint32_t uxL3FilterIds[ 2 ] = { ETH_L3_FILTER_0, ETH_L3_FILTER_1 };
-    uint32_t uxL3FilterIdIndex = 0;
-
-    for( NetworkEndPoint_t * pxEndPoint = FreeRTOS_FirstEndPoint( pxInterface ); pxEndPoint != NULL; pxEndPoint = FreeRTOS_NextEndPoint( pxInterface, pxEndPoint ) )
+    ETH_MACConfigTypeDef xMACConfig;
+    ( void ) HAL_ETH_GetMACConfig( pxEthHandle , &xMACConfig );
+    if( xMACConfig.ChecksumOffload == ENABLE )
     {
-        ETH_L3FilterConfigTypeDef xL3FilterConfig;
-        /* #if ( ipconfigIS_ENABLED( ipconfigUSE_IPv4 ) ) */
-        if( ENDPOINT_IS_IPv4( pxEndPoint ) )
+        const uint32_t uxL3FilterIds[ 2 ] = { ETH_L3_FILTER_0, ETH_L3_FILTER_1 };
+        uint32_t uxL3FilterIdIndex = 0;
+
+        for( NetworkEndPoint_t * pxEndPoint = FreeRTOS_FirstEndPoint( pxInterface ); pxEndPoint != NULL; pxEndPoint = FreeRTOS_NextEndPoint( pxInterface, pxEndPoint ) )
         {
-            ( void ) HAL_ETHEx_GetL3FilterConfig( pxEthHandle, uxL3FilterIds[ uxL3FilterIdIndex ], &xL3FilterConfig );
-            xL3FilterConfig.Protocol = ETH_L3_IPV4_MATCH;
-            ( void ) HAL_ETHEx_SetL3FilterConfig( pxEthHandle, uxL3FilterIds[ uxL3FilterIdIndex++ ], &xL3FilterConfig );
-        }
-        /* #if ( ipconfigIS_ENABLED( ipconfigUSE_IPv6 ) ) */
-        else if( ENDPOINT_IS_IPv6( pxEndPoint ) )
-        {
-            ( void ) HAL_ETHEx_GetL3FilterConfig( pxEthHandle, uxL3FilterIds[ uxL3FilterIdIndex ], &xL3FilterConfig );
-            xL3FilterConfig.Protocol = ETH_L3_IPV6_MATCH;
-            ( void ) HAL_ETHEx_SetL3FilterConfig( pxEthHandle, uxL3FilterIds[ uxL3FilterIdIndex++ ], &xL3FilterConfig );
+            ETH_L3FilterConfigTypeDef xL3FilterConfig;
+            /* #if ( ipconfigIS_ENABLED( ipconfigUSE_IPv4 ) ) */
+            if( ENDPOINT_IS_IPv4( pxEndPoint ) )
+            {
+                ( void ) HAL_ETHEx_GetL3FilterConfig( pxEthHandle, uxL3FilterIds[ uxL3FilterIdIndex ], &xL3FilterConfig );
+                xL3FilterConfig.Protocol = ETH_L3_IPV4_MATCH;
+                ( void ) HAL_ETHEx_SetL3FilterConfig( pxEthHandle, uxL3FilterIds[ uxL3FilterIdIndex++ ], &xL3FilterConfig );
+            }
+            /* #if ( ipconfigIS_ENABLED( ipconfigUSE_IPv6 ) ) */
+            else if( ENDPOINT_IS_IPv6( pxEndPoint ) )
+            {
+                ( void ) HAL_ETHEx_GetL3FilterConfig( pxEthHandle, uxL3FilterIds[ uxL3FilterIdIndex ], &xL3FilterConfig );
+                xL3FilterConfig.Protocol = ETH_L3_IPV6_MATCH;
+                ( void ) HAL_ETHEx_SetL3FilterConfig( pxEthHandle, uxL3FilterIds[ uxL3FilterIdIndex++ ], &xL3FilterConfig );
+            }
+
+            if( uxL3FilterIdIndex >= ARRAY_SIZE( uxL3FilterIds ) )
+            {
+                break;
+            }
         }
 
-        if( uxL3FilterIdIndex >= ARRAY_SIZE( uxL3FilterIds ) )
-        {
-            break;
-        }
+        /* TODO: This needs to be live updated based on sockets? */
+        /* ETH_L4FilterConfigTypeDef xL4FilterConfigUDP;
+        ( void ) HAL_ETHEx_GetL4FilterConfig( pxEthHandle, ETH_L4_FILTER_0, &xL4FilterConfigUDP );
+        xL4FilterConfigUDP.Protocol = ETH_L4_UDP_MATCH;
+        ( void ) HAL_ETHEx_SetL4FilterConfig( pxEthHandle, ETH_L4_FILTER_0, &xL4FilterConfigUDP );
+
+        #if ( ipconfigIS_ENABLED( ipconfigUSE_TCP ) )
+            ETH_L4FilterConfigTypeDef xL4FilterConfigTCP;
+            ( void ) HAL_ETHEx_GetL4FilterConfig( pxEthHandle, ETH_L4_FILTER_1, &xL4FilterConfigTCP );
+            xL4FilterConfigTCP.Protocol = ETH_L4_TCP_MATCH;
+            ( void ) HAL_ETHEx_SetL4FilterConfig( pxEthHandle, ETH_L4_FILTER_1, &xL4FilterConfigTCP );
+        #endif */
+
+        HAL_ETHEx_EnableL3L4Filtering( pxEthHandle );
     }
-
-    /* TODO: This needs to be live updated based on sockets? */
-    /* ETH_L4FilterConfigTypeDef xL4FilterConfigUDP;
-    ( void ) HAL_ETHEx_GetL4FilterConfig( pxEthHandle, ETH_L4_FILTER_0, &xL4FilterConfigUDP );
-    xL4FilterConfigUDP.Protocol = ETH_L4_UDP_MATCH;
-    ( void ) HAL_ETHEx_SetL4FilterConfig( pxEthHandle, ETH_L4_FILTER_0, &xL4FilterConfigUDP );
-
-    #if ( ipconfigIS_ENABLED( ipconfigUSE_TCP ) )
-        ETH_L4FilterConfigTypeDef xL4FilterConfigTCP;
-        ( void ) HAL_ETHEx_GetL4FilterConfig( pxEthHandle, ETH_L4_FILTER_1, &xL4FilterConfigTCP );
-        xL4FilterConfigTCP.Protocol = ETH_L4_TCP_MATCH;
-        ( void ) HAL_ETHEx_SetL4FilterConfig( pxEthHandle, ETH_L4_FILTER_1, &xL4FilterConfigTCP );
-    #endif */
-
-    HAL_ETHEx_EnableL3L4Filtering( pxEthHandle );
 }
 
 #endif /* ifdef niEMAC_STM32HX */
@@ -1324,8 +1360,6 @@ void HAL_ETH_ErrorCallback( ETH_HandleTypeDef * pxEthHandle )
         }
     }
 
-    configASSERT( ( pxEthHandle->ErrorCode & HAL_ETH_ERROR_PARAM ) == 0 );
-
     xSwitchRequired |= xHigherPriorityTaskWoken;
 }
 
@@ -1427,7 +1461,6 @@ void HAL_ETH_RxLinkCallback( void ** ppvStart, void ** ppvEnd, uint8_t * pucBuff
 
 void HAL_ETH_TxFreeCallback( uint32_t * pulBuff )
 {
-    configASSERT( pulBuff );
     NetworkBufferDescriptor_t * const pxNetworkBuffer = ( NetworkBufferDescriptor_t * ) pulBuff;
     prvReleaseNetworkBufferDescriptor( pxNetworkBuffer );
 }
