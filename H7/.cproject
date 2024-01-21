@@ -82,7 +82,7 @@
 					<sourceEntries>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Core"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Drivers"/>
-						<entry flags="VALUE_WORKSPACE_PATH" kind="sourcePath" name="Libs"/>
+						<entry excluding="FreeRTOS-Plus-TCP/portable/Legacy/" flags="VALUE_WORKSPACE_PATH" kind="sourcePath" name="Libs"/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>
@@ -165,7 +165,7 @@
 					<sourceEntries>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Core"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Drivers"/>
-						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Libs"/>
+						<entry excluding="FreeRTOS-Plus-TCP/portable/Legacy/" flags="VALUE_WORKSPACE_PATH" kind="sourcePath" name="Libs"/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>

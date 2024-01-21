@@ -18,7 +18,7 @@
 #ifdef STM32F7
 	#define ipconfigIPERF_TX_WINSIZE				( 57 )
 #else
-	#define ipconfigIPERF_TX_WINSIZE				( 73 )
+	#define ipconfigIPERF_TX_WINSIZE				( 55 )
 #endif
 #define ipconfigIPERF_TX_BUFSIZE				( ipconfigIPERF_TX_WINSIZE * ipconfigTCP_MSS )
 #define ipconfigIPERF_RX_WINSIZE				ipconfigIPERF_TX_WINSIZE
