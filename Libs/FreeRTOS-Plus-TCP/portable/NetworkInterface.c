@@ -279,7 +279,7 @@ static BaseType_t prvGetPhyLinkStatus( NetworkInterface_t * pxInterface );
 static BaseType_t prvNetworkInterfaceInitialise( NetworkInterface_t * pxInterface );
 static BaseType_t prvNetworkInterfaceOutput( NetworkInterface_t * pxInterface, NetworkBufferDescriptor_t * const pxDescriptor, BaseType_t xReleaseAfterSend );
 static void prvAddAllowedMACAddress( const uint8_t * pucMacAddress );
-//static void prvRemoveAllowedMACAddress( const uint8_t * pucMacAddress );
+static void prvRemoveAllowedMACAddress( const uint8_t * pucMacAddress );
 
 /* EMAC Task */
 static BaseType_t prvNetworkInterfaceInput( ETH_HandleTypeDef * pxEthHandle, NetworkInterface_t * pxInterface );
@@ -707,35 +707,54 @@ static void prvAddAllowedMACAddress( const uint8_t * pucMacAddress )
 
 /*---------------------------------------------------------------------------*/
 
-#if 0
-
 static void prvRemoveAllowedMACAddress( const uint8_t * pucMacAddress )
 {
-    configASSERT( pucMacAddress );
+	ETH_HandleTypeDef * pxEthHandle = &xEthHandle;
+	BaseType_t xFoundMatch = pdFALSE;
+	for( UBaseType_t uxIndex = 0; uxIndex < niEMAC_MAC_SRC_MATCH_COUNT; ++uxIndex )
+	{
+		if( ucSrcMatchCounters[ uxIndex ] > 0U )
+		{
+			/* Temporary inefficient method to avoid writing a HAL_ETH_GetSourceMACAddrMatch for Hx & Fx */
+			if( memcmp( pucMacAddress, xMatchedMacAddresses[ uxIndex ].ucBytes, ipMAC_ADDRESS_LENGTH_BYTES ) == 0 )
+			{
+				if( ucSrcMatchCounters[ uxIndex ] < UINT8_MAX )
+				{
+					--( ucSrcMatchCounters[ uxIndex ] );
 
-    /* const BaseType_t xIsMulticast = niEMAC_MAC_IS_MULTICAST( pucMacAddress ); */
+					if( ucSrcMatchCounters[ uxIndex ] == 0 )
+					{
+						/* TODO: Just disable it, don't need to clear? */
+						( void ) memset( &( xMatchedMacAddresses[ uxIndex ].ucBytes ), 0, ipMAC_ADDRESS_LENGTH_BYTES );
+						( void ) HAL_ETH_SetSourceMACAddrMatch( pxEthHandle, xMacAddressEntries[ uxIndex ], xMatchedMacAddresses[ uxIndex ].ucBytes );
+					}
+				}
+				xFoundMatch = pdTRUE;
+				break;
+			}
+		}
+	}
 
-    BaseType_t xFound = pdFALSE;
-    for( UBaseType_t uxIndex = 0; uxIndex < ARRAY_SIZE( xMatchedMacAddresses ); ++uxIndex )
-    {
-        /* Temporary inefficient method to avoid writing a HAL_ETH_GetSourceMACAddrMatch for Hx & Fx */
-        if( memcmp( pucMacAddress, xMatchedMacAddresses[ uxIndex ].ucBytes, ipMAC_ADDRESS_LENGTH_BYTES ) == 0 )
-        {
-            /* Already assigned this mac address */
-            xFound = pdTRUE;
-        }
-    }
+	if( xFoundMatch == pdFALSE )
+	{
+		const uint32_t ulHash = prvCalcCrc32( pucMacAddress );
+		const uint8_t ucHashIndex = ( ulHash >> 26 ) & 0x3FU;
 
-    if( xFound == pdTRUE )
-    {
-        ETH_HandleTypeDef * pxEthHandle = &xEthHandle;
-        ETH_MACFilterConfigTypeDef xFilterConfig;
-        ( void ) HAL_ETH_GetMACFilterConfig( pxEthHandle, &xFilterConfig );
+		if( ucAddrHashCounters[ ucHashIndex ] > 0U )
+		{
+			if( ucAddrHashCounters[ ucHashIndex ] < UINT8_MAX )
+			{
+				--( ucAddrHashCounters[ ucHashIndex ] );
 
-    }
+				if( ucAddrHashCounters[ ucHashIndex ] == 0 )
+				{
+					/* TODO: fix this to clear instead of add index */
+					prvUpdateMacHashFilter( pxEthHandle, ucHashIndex );
+				}
+			}
+		}
+	}
 }
-
-#endif
 
 /*---------------------------------------------------------------------------*/
 /*===========================================================================*/
