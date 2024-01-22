@@ -1012,9 +1012,11 @@ static BaseType_t prvEthConfigInit( ETH_HandleTypeDef * pxEthHandle, const Netwo
             #if defined( niEMAC_STM32HX )
                 prvInitPacketFilter( pxEthHandle, pxInterface );
 
-                /* HAL_ETHEx_DisableARPOffload( pxEthHandle );
-				HAL_ETHEx_SetARPAddressMatch( pxEthHandle, ulAddress );
-				HAL_ETHEx_EnableARPOffload( pxEthHandle ); */
+				/* #if ipconfigIS_ENABLED( niEMAC_ARP_OFFLOAD )
+					HAL_ETHEx_DisableARPOffload( pxEthHandle );
+					HAL_ETHEx_SetARPAddressMatch( pxEthHandle, ulAddress );
+					HAL_ETHEx_EnableARPOffload( pxEthHandle );
+				#endif */
             #endif
 
             prvInitMacAddresses( pxEthHandle, pxInterface );
@@ -1620,6 +1622,12 @@ static BaseType_t prvAcceptPacket( const NetworkBufferDescriptor_t * const pxDes
             FreeRTOS_debug_printf( ( "prvAcceptPacket: Rx Data Error\n" ) );
             break;
         }
+    	/* if( ( ulErrorCode & ETH_DRIBBLE_BIT_ERROR ) != 0 )
+    	if( ( ulErrorCode & ETH_RECEIVE_ERROR ) != 0 )
+    	if( ( ulErrorCode & ETH_RECEIVE_OVERFLOW ) != 0 )
+    	if( ( ulErrorCode & ETH_WATCHDOG_TIMEOUT ) != 0 )
+    	if( ( ulErrorCode & ETH_GIANT_PACKET ) != 0 )
+    	if( ( ulErrorCode & ETH_CRC_ERROR ) != 0 ) */
 
         if( usLength > niEMAC_DATA_BUFFER_SIZE )
         {
@@ -1718,14 +1726,6 @@ void HAL_ETH_ErrorCallback( ETH_HandleTypeDef * pxEthHandle )
 		if( ( HAL_ETH_GetMACError( pxEthHandle ) & ETH_TRANSMIT_JABBR_TIMEOUT ) != 0 )*/
 		eErrorEvents |= eMacEventErrMac;
     }
-
-	/* if( ( HAL_ETH_GetError( pxEthHandle ) & ETH_DRIBBLE_BIT_ERROR ) != 0 )
-	if( ( HAL_ETH_GetError( pxEthHandle ) & ETH_RECEIVE_ERROR ) != 0 )
-	if( ( HAL_ETH_GetError( pxEthHandle ) & ETH_RECEIVE_OVERFLOW ) != 0 )
-	if( ( HAL_ETH_GetError( pxEthHandle ) & ETH_WATCHDOG_TIMEOUT ) != 0 )
-	if( ( HAL_ETH_GetError( pxEthHandle ) & ETH_GIANT_PACKET ) != 0 )
-	if( ( HAL_ETH_GetError( pxEthHandle ) & ETH_CRC_ERROR ) != 0 )
-	eErrorEvents |= eMacEventErrEth; */
 
     if( ( xEMACTaskHandle != NULL ) && ( eErrorEvents != eMacEventNone ) )
     {
