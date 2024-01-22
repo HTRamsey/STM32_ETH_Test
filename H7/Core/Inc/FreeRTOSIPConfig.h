@@ -10,7 +10,7 @@
 #define ipconfigUSE_NETWORK_EVENT_HOOK 					0
 #define ipconfigUSE_DHCP								0
 #define ipconfigUSE_TCP									1
-/* #define ipconfigUSE_TCP_WIN    							0 */
+#define ipconfigUSE_TCP_WIN    							0
 #define ipconfigUSE_DNS									0
 #define ipconfigBYTE_ORDER 								pdFREERTOS_LITTLE_ENDIAN
 #define ipconfigSUPPORT_OUTGOING_PINGS 					1
