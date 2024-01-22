@@ -215,7 +215,6 @@
 #define niEMAC_MAC_IS_MULTICAST( MAC )	( ( MAC[ 0 ] & 1U ) != 0 )
 #define niEMAC_MAC_IS_UNICAST( MAC )	( ( MAC[ 0 ] & 1U ) == 0 )
 #define niEMAC_ADDRESS_HASH_BITS	64U
-#define niEMAC_ADDRESS_HASH_MASK	( niEMAC_ADDRESS_HASH_BITS - 1U )
 #define niEMAC_MAC_SRC_MATCH_COUNT	3U
 
 #define niEMAC_DEBUG( X, MSG ) if( ( X ) != 0 ) { FreeRTOS_debug_printf( ( MSG ) ); }
@@ -295,7 +294,6 @@ static BaseType_t prvPhyStart( ETH_HandleTypeDef * pxEthHandle, NetworkInterface
 static void prvReleaseTxPacket( ETH_HandleTypeDef * pxEthHandle );
 static BaseType_t prvMacUpdateConfig( ETH_HandleTypeDef * pxEthHandle, EthernetPhy_t * pxPhyObject );
 static uint32_t prvCalcCrc32( const uint8_t * pucMAC );
-static void prvUpdateMacHashFilter( ETH_HandleTypeDef * pxEthHandle, uint8_t ucEntry );
 static void prvReleaseNetworkBufferDescriptor( NetworkBufferDescriptor_t * const pxDescriptor );
 static void prvSendRxEvent( NetworkBufferDescriptor_t * const pxDescriptor );
 
@@ -322,21 +320,25 @@ static ETH_HandleTypeDef xEthHandle;
 
 static EthernetPhy_t xPhyObject;
 
-static TaskHandle_t xEMACTaskHandle;
+static TaskHandle_t xEMACTaskHandle = NULL;
 
-static SemaphoreHandle_t xTxMutex, xTxDescSem;
+static SemaphoreHandle_t xTxMutex = NULL, xTxDescSem = NULL;
 
-static BaseType_t xSwitchRequired;
+static BaseType_t xSwitchRequired = pdFALSE;
 
 static eMAC_INIT_STATUS_TYPE xMacInitStatus = eMacEthInit;
 
+/* Src Mac Matching */
 /* ETH_MAC_ADDRESS0 reserved for the primary MAC-address. */
 /* TODO: Stil need to check if new address matches ETH_MAC_ADDRESS0 */
 static const uint32_t xMacAddressEntries[ niEMAC_MAC_SRC_MATCH_COUNT ] = { ETH_MAC_ADDRESS1, ETH_MAC_ADDRESS2, ETH_MAC_ADDRESS3 };
-static MACAddress_t xMatchedMacAddresses[ niEMAC_MAC_SRC_MATCH_COUNT ] = { 0 };
-static uint8_t ucAddrHashCounters[ niEMAC_ADDRESS_HASH_BITS ] = { 0U };
+static MACAddress_t xMatchedMacAddresses[ niEMAC_MAC_SRC_MATCH_COUNT ];
 static uint8_t ucSrcMatchCounters[ niEMAC_MAC_SRC_MATCH_COUNT ] = { 0U };
 static uint8_t uxMACEntryIndex = 0;
+
+/* Src Mac Hashing */
+static uint32_t ulHashTable[ niEMAC_ADDRESS_HASH_BITS / 32 ];
+static uint8_t ucAddrHashCounters[ niEMAC_ADDRESS_HASH_BITS ] = { 0U };
 
 /*---------------------------------------------------------------------------*/
 /*===========================================================================*/
@@ -694,7 +696,16 @@ static void prvAddAllowedMACAddress( const uint8_t * pucMacAddress )
         {
 			if( ucAddrHashCounters[ ucHashIndex ] == 0 )
 			{
-				prvUpdateMacHashFilter( pxEthHandle, ucHashIndex );
+                if( ucHashIndex & 0x20U )
+                {
+                    ulHashTable[ 1 ] |= ( 1U << ( ucHashIndex & 0x1FU ) );
+                }
+                else
+                {
+                    ulHashTable[ 0 ] |= ( 1U << ucHashIndex );
+                }
+
+                ( void ) HAL_ETH_SetHashTable( pxEthHandle, ulHashTable );
 			}
 
 			if( ucAddrHashCounters[ ucHashIndex ] < UINT8_MAX )
@@ -748,8 +759,16 @@ static void prvRemoveAllowedMACAddress( const uint8_t * pucMacAddress )
 
 				if( ucAddrHashCounters[ ucHashIndex ] == 0 )
 				{
-					/* TODO: fix this to clear instead of add index */
-					prvUpdateMacHashFilter( pxEthHandle, ucHashIndex );
+					if( ucHashIndex & 0x20U )
+                    {
+                        ulHashTable[ 1 ] &= ~( 1U << ( ucHashIndex & 0x1FU ) );
+                    }
+                    else
+                    {
+                        ulHashTable[ 0 ] &= ~( 1U << ucHashIndex );
+                    }
+
+                    ( void ) HAL_ETH_SetHashTable( pxEthHandle, ulHashTable );
 				}
 			}
 		}
@@ -847,10 +866,6 @@ static portTASK_FUNCTION( prvEMACHandlerTask, pvParameters )
             if( ( ulISREvents & eMacEventErrTx ) != 0 )
             {
             	prvReleaseTxPacket( pxEthHandle );
-            	while( ETH_TX_DESC_CNT - uxQueueMessagesWaiting( ( QueueHandle_t ) xTxDescSem ) > pxEthHandle->TxDescList.BuffersInUse )
-				{
-					( void ) xSemaphoreGive( xTxDescSem );
-				}
             }
 
             if( ( ulISREvents & eMacEventErrEth ) != 0 )
@@ -890,9 +905,7 @@ static portTASK_FUNCTION( prvEMACHandlerTask, pvParameters )
             else
             {
                 ( void ) HAL_ETH_Stop_IT( pxEthHandle );
-                /* TODO: does this need to be done? */
-                /* ( void ) memset( &pxEthHandle->Init.TxDesc, 0, sizeof( pxEthHandle->Init.TxDesc ) );
-                prvReleaseTxPacket( pxEthHandle ); */
+                prvReleaseTxPacket( pxEthHandle );
                 #if ( ipconfigIS_ENABLED( ipconfigSUPPORT_NETWORK_DOWN_EVENT ) )
                     FreeRTOS_NetworkDown( pxInterface );
                 #endif
@@ -1221,6 +1234,12 @@ static void prvReleaseTxPacket( ETH_HandleTypeDef * pxEthHandle )
 	{
 		FreeRTOS_debug_printf( ( "prvReleaseTxPacket: Failed\n" ) );
 	}
+
+	/* TODO: Is it possible for the semaphore and BuffersInUse to get out of sync? */
+	/* while( ETH_TX_DESC_CNT - uxQueueMessagesWaiting( ( QueueHandle_t ) xTxDescSem ) > pxEthHandle->TxDescList.BuffersInUse )
+	{
+		( void ) xSemaphoreGive( xTxDescSem );
+	} */
 }
 
 static BaseType_t prvMacUpdateConfig( ETH_HandleTypeDef * pxEthHandle, EthernetPhy_t * pxPhyObject )
@@ -1248,12 +1267,12 @@ static BaseType_t prvMacUpdateConfig( ETH_HandleTypeDef * pxEthHandle, EthernetP
         xResult = pdTRUE;
     }
 
-	/* #if ipconfigIS_ENABLED( niEMAC_AUTO_LOW_POWER )
+	#if ipconfigIS_ENABLED( niEMAC_AUTO_LOW_POWER )
 		if( ( pxEthHandle->Init.MediaInterface = HAL_ETH_MII_MODE ) && ( xMACConfig.DuplexMode == ETH_FULLDUPLEX_MODE ) && ( xMACConfig.Speed == ETH_SPEED_100M ) )
 		{
 			HAL_ETHEx_EnterLPIMode( pxEthHandle, ENABLE, DISABLE );
 		}
-	#endif */
+	#endif
 
     return xResult;
 }
@@ -1284,27 +1303,6 @@ static uint32_t prvCalcCrc32( const uint8_t * pucMAC )
     }
 
     return ~ulCRC32;
-}
-
-/*---------------------------------------------------------------------------*/
-
-/* Update the Hash Table Registers with hash value of the given MAC address */
-static void prvUpdateMacHashFilter( ETH_HandleTypeDef * pxEthHandle, uint8_t ucEntry )
-{
-    static uint32_t ulHashTable[ 2 ];
-
-    /* Use the upper or lower Hash Table Registers
-     * to set the required bit based on the ulHash */
-    if( ucEntry & 0x20U )
-    {
-    	ulHashTable[ 1 ] |= ( 1U << ( ucEntry & 0x1FU ) );
-    }
-    else
-    {
-    	ulHashTable[ 0 ] |= ( 1U << ucEntry );
-    }
-
-    ( void ) HAL_ETH_SetHashTable( pxEthHandle, ulHashTable );
 }
 
 /*---------------------------------------------------------------------------*/
