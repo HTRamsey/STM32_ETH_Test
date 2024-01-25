@@ -70,8 +70,7 @@ extern uint32_t vGetRunTimeCounterValue( void );
 #define INCLUDE_xTaskGetHandle                  1
 #define INCLUDE_xTaskResumeFromISR              1
 
-#define configMAX_FREERTOS_INTERRUPT_PRIORITY  5
-#define configMAX_SYSCALL_INTERRUPT_PRIORITY ( configMAX_FREERTOS_INTERRUPT_PRIORITY << (8 - __NVIC_PRIO_BITS) )
+#define configMAX_SYSCALL_INTERRUPT_PRIORITY ( 0xF << ( 8 - __NVIC_PRIO_BITS ) )
 
 #define configASSERT( x ) assert_param( x )
 
