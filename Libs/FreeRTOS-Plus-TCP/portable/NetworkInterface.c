@@ -71,6 +71,14 @@
     #error "Unknown STM32 Family for NetworkInterface"
 #endif
 
+#ifdef LAN8742A_PHY_ADDRESS
+    #include "lan8742/lan8742.h"
+#endif
+
+#ifdef DP83848_PHY_ADDRESS
+    #include "dp83848/dp83848.h"
+#endif
+
 /*---------------------------------------------------------------------------*/
 /*===========================================================================*/
 /*                                Config                                     */
@@ -118,10 +126,9 @@
 
 #ifdef niEMAC_STM32HX
     #define niEMAC_AUTO_LOW_POWER   ( ipconfigDISABLE && ipconfigIS_DISABLED( niEMAC_USE_RMII ) )
+    #define niEMAC_TCP_SEGMENTATION ipconfigDISABLE
+    #define niEMAC_ARP_OFFLOAD      ipconfigDISABLE
 #endif
-
-#define niEMAC_TCP_SEGMENTATION ipconfigDISABLE
-#define niEMAC_ARP_OFFLOAD ipconfigDISABLE
 
 /*---------------------------------------------------------------------------*/
 /*===========================================================================*/
@@ -206,13 +213,6 @@
 
 #define niEMAC_BUFS_PER_DESC 2U
 
-/* TODO: Enabled and use interrupts for phy instead of polling? */
-/*#define niPHY_ISR_AN_COMPLETE 0x0040
-#define niPHY_ISR_LINK_DOWN 0x0010
-
-#define niPHY_IMR_AN_COMPLETE 0x0040
-#define niPHY_IMR_LINK_DOWN 0x0010*/
-
 /* IEEE 802.3 CRC32 polynomial - 0x04C11DB7 */
 #define niEMAC_CRC_POLY 0x04C11DB7
 #define niEMAC_MAC_IS_MULTICAST( MAC )  ( ( MAC[ 0 ] & 1U ) != 0 )
@@ -251,16 +251,36 @@ typedef enum
     eMacInitComplete /* Initialisation was successful. */
 } eMAC_INIT_STATUS_TYPE;
 
-/* typedef struct xEMACData
+/* typedef struct xMacSrcMatchData
+{
+    const uint32_t xSrcMatchRegOffets[ niEMAC_MAC_SRC_MATCH_COUNT ];
+    uint8_t ucSrcMatchCounters[ niEMAC_MAC_SRC_MATCH_COUNT ];
+    uint8_t uxMACEntryIndex = 0;
+} MacSrcMatchData_t;
+
+typedef struct xMacHashData
+{
+    uint32_t ulHashTable[ niEMAC_ADDRESS_HASH_BITS / 32 ];
+    ucAddrHashCounters[ niEMAC_ADDRESS_HASH_BITS ];
+} MacHashData_t;
+
+typedef struct xMacFilteringData
+{
+    MacSrcMatchData_t xSrcMatch;
+    MacHashData_t xHash;
+} MacFilteringData_t;
+
+typedef struct xEMACData
 {
     ETH_HandleTypeDef xEthHandle;
     EthernetPhy_t xPhyObject;
     TaskHandle_t xEMACTaskHandle;
-    SemaphoreHandle_t xTxMutex;
+    SemaphoreHandle_t xTxMutex, xTxDescSem;
+    ETH_BufferTypeDef xTxBuffers[ niEMAC_BUFS_PER_DESC * ETH_TX_DESC_CNT ];
     BaseType_t xSwitchRequired;
     eMAC_INIT_STATUS_TYPE xMacInitStatus;
     BaseType_t xEMACIndex;
-    UBaseType_t uxMACEntry;
+    MacFilteringData_t xMacFilteringData;
 } EMACData_t; */
 
 /* TODO: need a data structure to assist in adding/removing allowed addresses */
@@ -326,12 +346,30 @@ NetworkInterface_t * pxSTM32_FillInterfaceDescriptor( BaseType_t xEMACIndex, Net
 
 static ETH_HandleTypeDef xEthHandle;
 
-/* static ETH_TxPacketConfig xTxConfig; */
-
 static EthernetPhy_t xPhyObject;
 
-static TaskHandle_t xEMACTaskHandle = NULL;
+/* #ifdef LAN8742A_PHY_ADDRESS
+    static lan8742_Object_t xLan8742aObject;
+    static lan8742_IOCtx_t xLan8742aControl = {
+        .Init = NULL,
+        .DeInit = NULL,
+        .WriteReg = &prvPhyWriteReg,
+        .ReadReg = &prvPhyReadReg,
+        .GetTick = &HAL_GetTick,
+    };
+#endif
+#ifdef DP83848_PHY_ADDRESS
+    static dp83848_Object_t xDp83848Object;
+    static dp83848_IOCtx_t xDp83848Control = {
+        .Init = NULL,
+        .DeInit = NULL,
+        .WriteReg = &prvPhyWriteReg,
+        .ReadReg = &prvPhyReadReg,
+        .GetTick = &HAL_GetTick,
+    };
+#endif */
 
+static TaskHandle_t xEMACTaskHandle = NULL;
 static SemaphoreHandle_t xTxMutex = NULL, xTxDescSem = NULL;
 
 static BaseType_t xSwitchRequired = pdFALSE;
@@ -435,6 +473,16 @@ static BaseType_t prvNetworkInterfaceInitialise( NetworkInterface_t * pxInterfac
                 break;
             }
 
+            /* #ifdef LAN8742A_PHY_ADDRESS
+                ( void ) LAN8742_RegisterBusIO( &xLan8742aObject, &xLan8742aControl );
+                ( void ) LAN8742_EnableIT( LAN8742_LINK_DOWN_IT );
+            #endif
+            #ifdef DP83848_PHY_ADDRESS
+                ( void ) DP83848_RegisterBusIO( &xDp83848Object, &xDp83848Control );
+                ( void ) DP83848_EnableIT( DP83848_LINK_DOWN_IT );
+            #endif */
+            /* __HAL_ETH_MAC_ENABLE_IT( pxEthHandle, ETH_MAC_PHY_IT ); */
+
             xMacInitStatus = eMacPhyStart;
             /* fallthrough */
 
@@ -525,27 +573,16 @@ static BaseType_t prvNetworkInterfaceOutput( NetworkInterface_t * pxInterface, N
             break;
         }
 
-        /* static ETH_BufferTypeDef xTxBuffers[ niEMAC_BUFS_PER_DESC * ETH_TX_DESC_CNT ] = { 0 }; */
-
-        static ETH_TxPacketConfig xTxConfig = {
-            .Attributes = ETH_TX_PACKETS_FEATURES_CRCPAD,
-            .Length = 0U,
-            .TxBuffer = NULL,
-            /* .SrcAddrCtrl = ETH_SRC_ADDR_CONTROL_DISABLE, */
+        ETH_TxPacketConfig xTxConfig = {
             .CRCPadCtrl = ETH_CRC_PAD_INSERT,
-            .ChecksumCtrl = ETH_CHECKSUM_IPHDR_PAYLOAD_INSERT_PHDR_CALC,
-            .MaxSegmentSize = ipconfigTCP_MSS,
-            .PayloadLen = 0U,
-            .TCPHeaderLen = 0U,
-            .VlanTag = 0U,
-            /* .VlanCtrl = ETH_VLAN_DISABLE, */
-            .InnerVlanTag = 0U,
-            /* .InnerVlanCtrl = ETH_INNER_VLAN_DISABLE, */
-            .pData = NULL,
+            .Attributes = ETH_TX_PACKETS_FEATURES_CRCPAD,
         };
 
         #if ipconfigIS_ENABLED( ipconfigDRIVER_INCLUDED_TX_IP_CHECKSUM )
+            xTxConfig.ChecksumCtrl = ETH_CHECKSUM_IPHDR_PAYLOAD_INSERT_PHDR_CALC;
             xTxConfig.Attributes |= ETH_TX_PACKETS_FEATURES_CSUM;
+        #else
+            xTxConfig.ChecksumCtrl = ETH_CHECKSUM_DISABLE;
         #endif
 
         const EthernetHeader_t * const pxEthHeader = ( const EthernetHeader_t * const ) pxDescriptor->pucEthernetBuffer;
@@ -573,6 +610,7 @@ static BaseType_t prvNetworkInterfaceOutput( NetworkInterface_t * pxInterface, N
                     #if ipconfigIS_ENABLED( ipconfigUSE_TCP )
                         TCPPacket_t * const pxTCPPacket = ( TCPPacket_t * const ) pxDescriptor->pucEthernetBuffer;
                         /* #if defined( niEMAC_STM32HX ) && ipconfigIS_ENABLED( niEMAC_TCP_SEGMENTATION )
+                            xTxConfig.MaxSegmentSize = ipconfigTCP_MSS;
                             xTxConfig.PayloadLen = pxDescriptor->xDataLength;
                             xTxConfig.TCPHeaderLen = ( pxTCPPacket->xIPHeader.ucVersionHeaderLength & ( uint8_t ) 0x0FU );
                             xTxConfig.Attributes |= ETH_TX_PACKETS_FEATURES_TSO;
@@ -976,15 +1014,6 @@ static BaseType_t prvEthConfigInit( ETH_HandleTypeDef * pxEthHandle, NetworkInte
 
         if( HAL_ETH_Init( pxEthHandle ) == HAL_OK )
         {
-            /* xTxConfig.CRCPadCtrl = ETH_CRC_PAD_INSERT;
-            xTxConfig.Attributes = ETH_TX_PACKETS_FEATURES_CRCPAD;
-            #if ipconfigIS_ENABLED( ipconfigDRIVER_INCLUDED_TX_IP_CHECKSUM )
-                xTxConfig.Attributes |= ETH_TX_PACKETS_FEATURES_CSUM;
-                xTxConfig.ChecksumCtrl = ETH_CHECKSUM_IPHDR_PAYLOAD_INSERT_PHDR_CALC;
-            #else
-                xTxConfig.ChecksumCtrl = ETH_CHECKSUM_DISABLE;
-            #endif */
-
             ETH_MACConfigTypeDef xMACConfig;
             ( void ) HAL_ETH_GetMACConfig( pxEthHandle , &xMACConfig );
             xMACConfig.ChecksumOffload = ( FunctionalState ) ipconfigIS_ENABLED( ipconfigDRIVER_INCLUDED_RX_IP_CHECKSUM );
@@ -1021,6 +1050,9 @@ static BaseType_t prvEthConfigInit( ETH_HandleTypeDef * pxEthHandle, NetworkInte
 
             prvInitMacAddresses( pxEthHandle, pxInterface );
 
+            /* __HAL_ETH_MAC_ENABLE_IT( pxEthHandle, ETH_MAC_RX_STATUS_IT ); */
+			/* __HAL_ETH_MAC_ENABLE_IT( pxEthHandle, ETH_MAC_TX_STATUS_IT ); */
+
             xResult = pdTRUE;
         }
     }
@@ -1038,11 +1070,16 @@ static BaseType_t prvEthConfigInit( ETH_HandleTypeDef * pxEthHandle, NetworkInte
             }
         #endif
 
-        const uint32_t ulPriority = NVIC_GetPriority( ETH_IRQn ) << ( 8 - configPRIO_BITS );
+		#ifdef configPRIO_BITS
+            const uint32_t ulPrioBits = configPRIO_BITS;
+		#else
+            const uint32_t ulPrioBits = __NVIC_PRIO_BITS;
+		#endif
+		const uint32_t ulPriority = NVIC_GetPriority( ETH_IRQn ) << ( 8U - ulPrioBits );
         if( ulPriority < configMAX_SYSCALL_INTERRUPT_PRIORITY )
         {
             FreeRTOS_debug_printf( ( "prvEthConfigInit: Incorrectly set ETH_IRQn priority\n" ) );
-            NVIC_SetPriority( ETH_IRQn, configMAX_SYSCALL_INTERRUPT_PRIORITY >> ( 8 - configPRIO_BITS ) );
+            NVIC_SetPriority( ETH_IRQn, configMAX_SYSCALL_INTERRUPT_PRIORITY >> ( 8U - ulPrioBits ) );
         }
         if( NVIC_GetEnableIRQ( ETH_IRQn ) == 0 )
         {
@@ -1620,20 +1657,87 @@ static BaseType_t prvAcceptPacket( const NetworkBufferDescriptor_t * const pxDes
             break;
         }
 
+        ETH_HandleTypeDef * pxEthHandle = &xEthHandle;
         uint32_t ulErrorCode = 0;
-        ( void ) HAL_ETH_GetRxDataErrorCode( &xEthHandle, &ulErrorCode );
+        ( void ) HAL_ETH_GetRxDataErrorCode( pxEthHandle, &ulErrorCode );
         if( ulErrorCode != 0 )
         {
+            /* if( ( ulErrorCode & ETH_DRIBBLE_BIT_ERROR ) != 0 )
+            if( ( ulErrorCode & ETH_RECEIVE_ERROR ) != 0 )
+            if( ( ulErrorCode & ETH_RECEIVE_OVERFLOW ) != 0 )
+            if( ( ulErrorCode & ETH_WATCHDOG_TIMEOUT ) != 0 )
+            if( ( ulErrorCode & ETH_GIANT_PACKET ) != 0 )
+            if( ( ulErrorCode & ETH_CRC_ERROR ) != 0 ) */
             iptraceETHERNET_RX_EVENT_LOST();
             FreeRTOS_debug_printf( ( "prvAcceptPacket: Rx Data Error\n" ) );
             break;
         }
-        /* if( ( ulErrorCode & ETH_DRIBBLE_BIT_ERROR ) != 0 )
-        if( ( ulErrorCode & ETH_RECEIVE_ERROR ) != 0 )
-        if( ( ulErrorCode & ETH_RECEIVE_OVERFLOW ) != 0 )
-        if( ( ulErrorCode & ETH_WATCHDOG_TIMEOUT ) != 0 )
-        if( ( ulErrorCode & ETH_GIANT_PACKET ) != 0 )
-        if( ( ulErrorCode & ETH_CRC_ERROR ) != 0 ) */
+
+        const ETH_DMADescTypeDef * const ulRxDesc = ( const ETH_DMADescTypeDef * const ) pxEthHandle->RxDescList.RxDesc[ pxEthHandle->RxDescList.RxDescIdx ];
+
+        const uint32_t ulRxDesc1 = ulRxDesc->DESC1;
+        /* if( READ_BIT( ulRxDesc1 , ETH_CHECKSUM_IP_PAYLOAD_ERROR ) != RESET )
+		if( READ_BIT( ulRxDesc1 , ETH_CHECKSUM_BYPASSED ) != RESET )
+		if( READ_BIT( ulRxDesc1 , ETH_CHECKSUM_IP_HEADER_ERROR ) != RESET ) */
+
+		if( READ_BIT( ulRxDesc1 , ETH_IP_HEADER_IPV4 ) != RESET )
+        {
+            #if ipconfigIS_DISABLED( ipconfigUSE_IPv4 )
+               break;
+            #else
+               /* prvAllowIPPacketIPv4(); */
+            #endif
+        }
+		else if( READ_BIT( ulRxDesc1 , ETH_IP_HEADER_IPV6 ) != RESET )
+        {
+            #if ipconfigIS_DISABLED( ipconfigUSE_IPv6 )
+               break;
+            #else
+                /* prvAllowIPPacketIPv6(); */
+            #endif
+        }
+
+        /* if( READ_BIT( ulRxDesc1 , ETH_DMARXNDESCWBF_PT ) == ETH_IP_PAYLOAD_UDP )
+        {
+            prvProcessUDPPacket();
+        } */
+        /* if( READ_BIT( ulRxDesc1 , ETH_DMARXNDESCWBF_PT ) == ETH_IP_PAYLOAD_ICMPN )
+        {
+            ProcessICMPPacket();
+        } */
+		if( READ_BIT( ulRxDesc1 , ETH_DMARXNDESCWBF_PT ) == ETH_IP_PAYLOAD_UNKNOWN )
+        {
+            break;
+        }
+		if( READ_BIT( ulRxDesc1 , ETH_DMARXNDESCWBF_PT ) == ETH_IP_PAYLOAD_TCP )
+        {
+            #if ipconfigIS_DISABLED( ipconfigUSE_TCP )
+                break;
+            #else
+                /* xProcessReceivedTCPPacket() */
+            #endif
+        }
+
+        /* const uint32_t ulRxDesc2 = ulRxDesc->DESC2;
+		if( READ_BIT( ulRxDesc2 , ETH_DMARXNDESCWBF_L3L4FM ) != RESET )
+		if( READ_BIT( ulRxDesc2 , ETH_DMARXNDESCWBF_L4FM ) != RESET )
+		if( READ_BIT( ulRxDesc2 , ETH_DMARXNDESCWBF_L3FM ) != RESET )
+
+		if( READ_BIT( ulRxDesc2 , ETH_DMARXNDESCWBF_MADRM ) != RESET )
+
+		if( READ_BIT( ulRxDesc2 , ETH_DMARXNDESCWBF_HF ) != RESET )
+		if( READ_BIT( ulRxDesc2 , ETH_DMARXNDESCWBF_DAF ) != RESET )
+		if( READ_BIT( ulRxDesc2 , ETH_DMARXNDESCWBF_SAF ) != RESET )
+		if( READ_BIT( ulRxDesc2 , ETH_DMARXNDESCWBF_VF ) != RESET )
+
+		if( READ_BIT( ulRxDesc2 , ETH_DMARXNDESCWBF_ARPNR ) != RESET )
+
+        const uint32_t ulRxDesc3 = ulRxDesc->DESC3;
+		if( READ_BIT( ulRxDesc3 , ETH_DMARXNDESCWBF_RS2V ) != RESET )
+		if( READ_BIT( ulRxDesc3 , ETH_DMARXNDESCWBF_RS1V ) != RESET )
+		if( READ_BIT( ulRxDesc3 , ETH_DMARXNDESCWBF_RS0V ) != RESET )
+
+		if( READ_BIT( ulRxDesc3 , ETH_DMARXNDESCWBF_ES ) != RESET ) */
 
         if( usLength > niEMAC_DATA_BUFFER_SIZE )
         {
@@ -1677,8 +1781,26 @@ void ETH_IRQHandler( void )
 {
     traceISR_ENTER();
 
+    ETH_HandleTypeDef * pxEthHandle = &xEthHandle;
+
     xSwitchRequired = pdFALSE;
-    HAL_ETH_IRQHandler( &xEthHandle );
+    HAL_ETH_IRQHandler( pxEthHandle );
+
+    /* if( __HAL_ETH_MAC_GET_IT( pxEthHandle, ETH_MAC_PHY_IT ) )
+    {
+        #ifdef LAN8742A_PHY_ADDRESS
+            if( LAN8742_GetITStatus( &xLan8742aObject, LAN8742_LINK_DOWN_IT ) )
+            {
+                LAN8742_ClearIT( &xLan8742aObject, LAN8742_LINK_DOWN_IT );
+            }
+        #endif
+        #ifdef DP83848_PHY_ADDRESS
+            if( DP83848_GetITStatus( &xLan8742aObject, LAN8742_LINK_DOWN_IT ) )
+            {
+                DP83848_ClearIT( &xLan8742aObject, LAN8742_LINK_DOWN_IT );
+            }
+        #endif
+    } */
 
     portYIELD_FROM_ISR( xSwitchRequired );
 }
@@ -1698,24 +1820,43 @@ void HAL_ETH_ErrorCallback( ETH_HandleTypeDef * pxEthHandle )
     if( ( HAL_ETH_GetError( pxEthHandle ) & HAL_ETH_ERROR_DMA ) != 0 )
     {
         eErrorEvents |= eMacEventErrDma;
-        /* if( pxEthHandle->DMAErrorCode & ETH_DMA_TX_PROCESS_STOPPED_FLAG ) */
+        const uint32_t ulDmaError = HAL_ETH_GetDMAError( pxEthHandle );
+        /* if( ( ulDmaError & ETH_DMA_TX_PROCESS_STOPPED_FLAG ) != 0 ) */
+        /* if( ( ulDmaError & ETH_DMA_CONTEXT_DESC_ERROR_FLAG ) != 0 ) */
+		/* if( ( ulDmaError & ETH_DMA_RX_NO_ERROR_FLAG ) != 0 ) */
+		/* if( ( ulDmaError & ETH_DMA_RX_DESC_READ_ERROR_FLAG ) != 0 ) */
+		/* if( ( ulDmaError & ETH_DMA_RX_DESC_WRITE_ERROR_FLAG ) != 0 ) */
+		/* if( ( ulDmaError & ETH_DMA_RX_BUFFER_READ_ERROR_FLAG ) != 0 ) */
+		/* if( ( ulDmaError & ETH_DMA_RX_BUFFER_WRITE_ERROR_FLAG ) != 0 ) */
+		/* if( ( ulDmaError & ETH_DMA_TX_NO_ERROR_FLAG ) != 0 ) */
+		/* if( ( ulDmaError & ETH_DMA_TX_DESC_READ_ERROR_FLAG ) != 0 ) */
+		/* if( ( ulDmaError & ETH_DMA_TX_DESC_WRITE_ERROR_FLAG ) != 0 ) */
+		/* if( ( ulDmaError & ETH_DMA_TX_BUFFER_READ_ERROR_FLAG ) != 0 ) */
+		/* if( ( ulDmaError & ETH_DMA_TX_BUFFER_WRITE_ERROR_FLAG ) != 0 ) */
+		/* if( ( ulDmaError & ETH_DMA_CONTEXT_DESC_ERROR_FLAG ) != 0 ) */
+		/* if( ( ulDmaError & ETH_DMA_FATAL_BUS_ERROR_FLAG ) != 0 ) */
+		/* if( ( ulDmaError & ETH_DMA_EARLY_TX_IT_FLAG ) != 0 ) */
+		/* if( ( ulDmaError & ETH_DMA_RX_WATCHDOG_TIMEOUT_FLAG ) != 0 ) */
+		/* if( ( ulDmaError & ETH_DMA_RX_PROCESS_STOPPED_FLAG ) != 0 ) */
+		/* if( ( ulDmaError & ETH_DMA_RX_BUFFER_UNAVAILABLE_FLAG ) != 0 ) */
+		/* if( ( ulDmaError & ETH_DMA_TX_PROCESS_STOPPED_FLAG ) != 0 ) */
         #ifdef niEMAC_STM32FX
-            if( ( HAL_ETH_GetDMAError( pxEthHandle ) & ETH_DMASR_TBUS ) != 0 )
+            if( ( ulDmaError & ETH_DMASR_TBUS ) != 0 )
             {
                 eErrorEvents |= eMacEventErrTx;
             }
 
-            if( ( HAL_ETH_GetDMAError( pxEthHandle ) & ETH_DMASR_RBUS ) != 0 )
+            if( ( ulDmaError & ETH_DMASR_RBUS ) != 0 )
             {
                 eErrorEvents |= eMacEventErrRx;
             }
         #elif defined( niEMAC_STM32HX )
-            if( ( HAL_ETH_GetDMAError( pxEthHandle ) & ETH_DMACSR_TBU ) != 0 )
+            if( ( ulDmaError & ETH_DMACSR_TBU ) != 0 )
             {
                 eErrorEvents |= eMacEventErrTx;
             }
 
-            if( ( HAL_ETH_GetDMAError( pxEthHandle ) & ETH_DMA_RX_BUFFER_UNAVAILABLE_FLAG ) != 0 )
+            if( ( ulDmaError & ETH_DMA_RX_BUFFER_UNAVAILABLE_FLAG ) != 0 )
             {
                 eErrorEvents |= eMacEventErrRx;
             }
@@ -1724,14 +1865,15 @@ void HAL_ETH_ErrorCallback( ETH_HandleTypeDef * pxEthHandle )
 
     if( ( HAL_ETH_GetError( pxEthHandle ) & HAL_ETH_ERROR_MAC ) != 0 )
     {
-        /*if( ( HAL_ETH_GetMACError( pxEthHandle ) & ETH_RECEIVE_WATCHDOG_TIMEOUT ) != 0 )
-        if( ( HAL_ETH_GetMACError( pxEthHandle ) & ETH_EXECESSIVE_COLLISIONS ) != 0 )
-        if( ( HAL_ETH_GetMACError( pxEthHandle ) & ETH_LATE_COLLISIONS ) != 0 )
-        if( ( HAL_ETH_GetMACError( pxEthHandle ) & ETH_EXECESSIVE_DEFERRAL ) != 0 )
-        if( ( HAL_ETH_GetMACError( pxEthHandle ) & ETH_LOSS_OF_CARRIER ) != 0 )
-        if( ( HAL_ETH_GetMACError( pxEthHandle ) & ETH_NO_CARRIER ) != 0 )
-        if( ( HAL_ETH_GetMACError( pxEthHandle ) & ETH_TRANSMIT_JABBR_TIMEOUT ) != 0 )*/
         eErrorEvents |= eMacEventErrMac;
+        const uint32_t ulMacError = HAL_ETH_GetMACError( pxEthHandle );
+        /* if( ( ulMacError & ETH_RECEIVE_WATCHDOG_TIMEOUT ) != 0 )
+        if( ( ulMacError & ETH_EXECESSIVE_COLLISIONS ) != 0 )
+        if( ( ulMacError & ETH_LATE_COLLISIONS ) != 0 )
+        if( ( ulMacError & ETH_EXECESSIVE_DEFERRAL ) != 0 )
+        if( ( ulMacError & ETH_LOSS_OF_CARRIER ) != 0 )
+        if( ( ulMacError & ETH_NO_CARRIER ) != 0 )
+        if( ( ulMacError & ETH_TRANSMIT_JABBR_TIMEOUT ) != 0 ) */
     }
 
     if( ( xEMACTaskHandle != NULL ) && ( eErrorEvents != eMacEventNone ) )
