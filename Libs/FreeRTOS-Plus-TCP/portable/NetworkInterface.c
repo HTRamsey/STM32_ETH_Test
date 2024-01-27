@@ -130,6 +130,8 @@
     #define niEMAC_ARP_OFFLOAD      ipconfigDISABLE
 #endif
 
+#define niEMAC_DEBUG_ERROR ipconfigDISABLE
+
 /*---------------------------------------------------------------------------*/
 /*===========================================================================*/
 /*                             Config Checks                                 */
@@ -335,6 +337,13 @@ static BaseType_t prvAcceptPacket( const NetworkBufferDescriptor_t * const pxDes
 
 /* Network Interface Definition */
 NetworkInterface_t * pxSTM32_FillInterfaceDescriptor( BaseType_t xEMACIndex, NetworkInterface_t * pxInterface );
+
+/* Debugging */
+#if ipconfigIS_ENABLED( niEMAC_DEBUG_ERROR )
+	static void prvHAL_RX_ErrorCallback( ETH_HandleTypeDef * pxEthHandle );
+	static void prvHAL_DMA_ErrorCallback( ETH_HandleTypeDef * pxEthHandle );
+	static void prvHAL_MAC_ErrorCallback( ETH_HandleTypeDef * pxEthHandle );
+#endif
 
 /*---------------------------------------------------------------------------*/
 /*===========================================================================*/
@@ -590,8 +599,6 @@ static BaseType_t prvNetworkInterfaceOutput( NetworkInterface_t * pxInterface, N
         {
             #if ipconfigIS_ENABLED( ipconfigUSE_IPv4 )
                 const IPPacket_t * const pxIPPacket = ( const IPPacket_t * const ) pxDescriptor->pucEthernetBuffer;
-                /* ProtocolPacket_t * const pxIPPacket = ( ProtocolPacket_t * const ) pxDescriptor->pucEthernetBuffer; */
-                /* ProtocolHeaders_t * const pxIPPacket = ( ProtocolHeaders_t * const ) pxDescriptor->pucEthernetBuffer; */
 
                 if( pxIPPacket->xIPHeader.ucProtocol == ipPROTOCOL_ICMP )
                 {
@@ -1017,12 +1024,9 @@ static BaseType_t prvEthConfigInit( ETH_HandleTypeDef * pxEthHandle, NetworkInte
             ETH_MACConfigTypeDef xMACConfig;
             ( void ) HAL_ETH_GetMACConfig( pxEthHandle , &xMACConfig );
             xMACConfig.ChecksumOffload = ( FunctionalState ) ipconfigIS_ENABLED( ipconfigDRIVER_INCLUDED_RX_IP_CHECKSUM );
-            #if defined( niEMAC_STM32FX )
-                xMACConfig.AutomaticPadCRCStrip = ENABLE;
-                xMACConfig.RetryTransmission = ENABLE;
-            #elif defined( niEMAC_STM32HX )
-                xMACConfig.CRCStripTypePacket = DISABLE;
-            #endif
+            xMACConfig.CRCStripTypePacket = DISABLE;
+            xMACConfig.AutomaticPadCRCStrip = ENABLE;
+            xMACConfig.RetryTransmission = ENABLE;
             ( void ) HAL_ETH_SetMACConfig( pxEthHandle, &xMACConfig );
 
             ETH_DMAConfigTypeDef xDMAConfig;
@@ -1040,12 +1044,6 @@ static BaseType_t prvEthConfigInit( ETH_HandleTypeDef * pxEthHandle, NetworkInte
 
             #if defined( niEMAC_STM32HX )
                 prvInitPacketFilter( pxEthHandle, pxInterface );
-
-                /* #if ipconfigIS_ENABLED( niEMAC_ARP_OFFLOAD )
-                    HAL_ETHEx_DisableARPOffload( pxEthHandle );
-                    HAL_ETHEx_SetARPAddressMatch( pxEthHandle, ulAddress );
-                    HAL_ETHEx_EnableARPOffload( pxEthHandle );
-                #endif */
             #endif
 
             prvInitMacAddresses( pxEthHandle, pxInterface );
@@ -1657,17 +1655,21 @@ static BaseType_t prvAcceptPacket( const NetworkBufferDescriptor_t * const pxDes
             break;
         }
 
+        if( usLength > pxDescriptor->xDataLength )
+		{
+			iptraceETHERNET_RX_EVENT_LOST();
+			FreeRTOS_debug_printf( ( "prvAcceptPacket: Packet size overflow\n" ) );
+			break;
+		}
+
         ETH_HandleTypeDef * pxEthHandle = &xEthHandle;
         uint32_t ulErrorCode = 0;
         ( void ) HAL_ETH_GetRxDataErrorCode( pxEthHandle, &ulErrorCode );
         if( ulErrorCode != 0 )
         {
-            /* if( ( ulErrorCode & ETH_DRIBBLE_BIT_ERROR ) != 0 )
-            if( ( ulErrorCode & ETH_RECEIVE_ERROR ) != 0 )
-            if( ( ulErrorCode & ETH_RECEIVE_OVERFLOW ) != 0 )
-            if( ( ulErrorCode & ETH_WATCHDOG_TIMEOUT ) != 0 )
-            if( ( ulErrorCode & ETH_GIANT_PACKET ) != 0 )
-            if( ( ulErrorCode & ETH_CRC_ERROR ) != 0 ) */
+			#if ipconfigIS_ENABLED( niEMAC_DEBUG_ERROR )
+        		prvHAL_RX_ErrorCallback( pxEthHandle );
+			#endif
             iptraceETHERNET_RX_EVENT_LOST();
             FreeRTOS_debug_printf( ( "prvAcceptPacket: Rx Data Error\n" ) );
             break;
@@ -1680,38 +1682,47 @@ static BaseType_t prvAcceptPacket( const NetworkBufferDescriptor_t * const pxDes
 		if( READ_BIT( ulRxDesc1 , ETH_CHECKSUM_BYPASSED ) != RESET )
 		if( READ_BIT( ulRxDesc1 , ETH_CHECKSUM_IP_HEADER_ERROR ) != RESET ) */
 
-		if( READ_BIT( ulRxDesc1 , ETH_IP_HEADER_IPV4 ) != RESET )
+		if( READ_BIT( ulRxDesc1, ETH_IP_HEADER_IPV4 ) != RESET )
         {
             #if ipconfigIS_DISABLED( ipconfigUSE_IPv4 )
+				iptraceETHERNET_RX_EVENT_LOST();
                break;
             #else
                /* prvAllowIPPacketIPv4(); */
             #endif
         }
-		else if( READ_BIT( ulRxDesc1 , ETH_IP_HEADER_IPV6 ) != RESET )
+		else if( READ_BIT( ulRxDesc1, ETH_IP_HEADER_IPV6 ) != RESET )
         {
             #if ipconfigIS_DISABLED( ipconfigUSE_IPv6 )
-               break;
+				iptraceETHERNET_RX_EVENT_LOST();
+				break;
             #else
                 /* prvAllowIPPacketIPv6(); */
             #endif
         }
 
-        /* if( READ_BIT( ulRxDesc1 , ETH_DMARXNDESCWBF_PT ) == ETH_IP_PAYLOAD_UDP )
+        /* if( READ_BIT( ulRxDesc1, ETH_DMARXNDESCWBF_PT ) == ETH_IP_PAYLOAD_UDP )
         {
             prvProcessUDPPacket();
         } */
-        /* if( READ_BIT( ulRxDesc1 , ETH_DMARXNDESCWBF_PT ) == ETH_IP_PAYLOAD_ICMPN )
+        if( READ_BIT( ulRxDesc1, ETH_DMARXNDESCWBF_PT ) == ETH_IP_PAYLOAD_ICMPN )
         {
-            ProcessICMPPacket();
-        } */
-		if( READ_BIT( ulRxDesc1 , ETH_DMARXNDESCWBF_PT ) == ETH_IP_PAYLOAD_UNKNOWN )
+			#if ipconfigIS_DISABLED( ipconfigREPLY_TO_INCOMING_PINGS ) && ipconfigIS_DISABLED( ipconfigSUPPORT_OUTGOING_PINGS )
+        		iptraceETHERNET_RX_EVENT_LOST();
+        		break;
+			#else
+        		/* ProcessICMPPacket(); */
+			#endif
+        }
+		if( READ_BIT( ulRxDesc1, ETH_DMARXNDESCWBF_PT ) == ETH_IP_PAYLOAD_UNKNOWN )
         {
+			iptraceETHERNET_RX_EVENT_LOST();
             break;
         }
-		if( READ_BIT( ulRxDesc1 , ETH_DMARXNDESCWBF_PT ) == ETH_IP_PAYLOAD_TCP )
+		if( READ_BIT( ulRxDesc1, ETH_DMARXNDESCWBF_PT ) == ETH_IP_PAYLOAD_TCP )
         {
             #if ipconfigIS_DISABLED( ipconfigUSE_TCP )
+				iptraceETHERNET_RX_EVENT_LOST();
                 break;
             #else
                 /* xProcessReceivedTCPPacket() */
@@ -1719,37 +1730,42 @@ static BaseType_t prvAcceptPacket( const NetworkBufferDescriptor_t * const pxDes
         }
 
         /* const uint32_t ulRxDesc2 = ulRxDesc->DESC2;
-		if( READ_BIT( ulRxDesc2 , ETH_DMARXNDESCWBF_L3L4FM ) != RESET )
-		if( READ_BIT( ulRxDesc2 , ETH_DMARXNDESCWBF_L4FM ) != RESET )
-		if( READ_BIT( ulRxDesc2 , ETH_DMARXNDESCWBF_L3FM ) != RESET )
+		if( READ_BIT( ulRxDesc2, ETH_DMARXNDESCWBF_L3L4FM ) != RESET )
+		if( READ_BIT( ulRxDesc2, ETH_DMARXNDESCWBF_L4FM ) != RESET )
+		if( READ_BIT( ulRxDesc2, ETH_DMARXNDESCWBF_L3FM ) != RESET )
 
-		if( READ_BIT( ulRxDesc2 , ETH_DMARXNDESCWBF_MADRM ) != RESET )
+		if( READ_BIT( ulRxDesc2, ETH_DMARXNDESCWBF_MADRM ) != RESET )
 
-		if( READ_BIT( ulRxDesc2 , ETH_DMARXNDESCWBF_HF ) != RESET )
-		if( READ_BIT( ulRxDesc2 , ETH_DMARXNDESCWBF_DAF ) != RESET )
-		if( READ_BIT( ulRxDesc2 , ETH_DMARXNDESCWBF_SAF ) != RESET )
-		if( READ_BIT( ulRxDesc2 , ETH_DMARXNDESCWBF_VF ) != RESET )
+		if( READ_BIT( ulRxDesc2, ETH_DMARXNDESCWBF_HF ) != RESET )
+		if( READ_BIT( ulRxDesc2, ETH_DMARXNDESCWBF_DAF ) != RESET )
+		if( READ_BIT( ulRxDesc2, ETH_DMARXNDESCWBF_SAF ) != RESET )
+		if( READ_BIT( ulRxDesc2, ETH_DMARXNDESCWBF_VF ) != RESET )
 
-		if( READ_BIT( ulRxDesc2 , ETH_DMARXNDESCWBF_ARPNR ) != RESET )
+		if( READ_BIT( ulRxDesc2, ETH_DMARXNDESCWBF_ARPNR ) != RESET ) */
 
-        const uint32_t ulRxDesc3 = ulRxDesc->DESC3;
-		if( READ_BIT( ulRxDesc3 , ETH_DMARXNDESCWBF_RS2V ) != RESET )
-		if( READ_BIT( ulRxDesc3 , ETH_DMARXNDESCWBF_RS1V ) != RESET )
-		if( READ_BIT( ulRxDesc3 , ETH_DMARXNDESCWBF_RS0V ) != RESET )
+        /* const uint32_t ulRxDesc3 = ulRxDesc->DESC3; */
+        /* #if ipconfigIS_ENABLED( niEMAC_ARP_OFFLOAD )
+            if( READ_BIT( ulRxDesc3, ETH_DMARXNDESCWBF_LT ) == ETH_DMARXNDESCWBF_LT_ARP )
+            {
+                const IPPacket_t * const pxIPPacket = ( const IPPacket_t * const ) pxDescriptor->pucEthernetBuffer;
+                const IPHeader_t * const pxIPHeader = &( pxIPPacket->xIPHeader );
+                const uint32_t ulSourceIPAddress = pxIPHeader->ulSourceIPAddress;
+                HAL_ETHEx_DisableARPOffload( pxEthHandle );
+                HAL_ETHEx_SetARPAddressMatch( pxEthHandle, ulSourceIPAddress );
+                HAL_ETHEx_EnableARPOffload( pxEthHandle );
+            }
+        #endif */
+		/* if( READ_BIT( ulRxDesc3, ETH_DMARXNDESCWBF_RS2V ) != RESET )
+		if( READ_BIT( ulRxDesc3, ETH_DMARXNDESCWBF_RS1V ) != RESET )
+		if( READ_BIT( ulRxDesc3, ETH_DMARXNDESCWBF_RS0V ) != RESET )
 
-		if( READ_BIT( ulRxDesc3 , ETH_DMARXNDESCWBF_ES ) != RESET ) */
-
-        if( usLength > niEMAC_DATA_BUFFER_SIZE )
-        {
-            iptraceETHERNET_RX_EVENT_LOST();
-            FreeRTOS_debug_printf( ( "prvAcceptPacket: Packet size overflow\n" ) );
-            break;
-        }
+		if( READ_BIT( ulRxDesc3, ETH_DMARXNDESCWBF_ES ) != RESET ) */
 
         /* TODO: Should we do this even if it is handled in hardware too? */
         #if ipconfigIS_ENABLED( ipconfigETHERNET_DRIVER_FILTERS_FRAME_TYPES )
             if( eConsiderFrameForProcessing( pxDescriptor->pucEthernetBuffer ) != eProcessBuffer )
             {
+            	iptraceETHERNET_RX_EVENT_LOST();
                 FreeRTOS_debug_printf( ( "prvAcceptPacket: Frame discarded\n" ) );
                 break;
             }
@@ -1759,6 +1775,7 @@ static BaseType_t prvAcceptPacket( const NetworkBufferDescriptor_t * const pxDes
         #if ipconfigIS_ENABLED( ipconfigETHERNET_DRIVER_FILTERS_PACKETS )
             if( eConsiderPacketForProcessing( pxDescriptor->pucEthernetBuffer ) != eProcessBuffer )
             {
+            	iptraceETHERNET_RX_EVENT_LOST();
                 FreeRTOS_debug_printf( ( "prvAcceptPacket: Packet discarded\n" ) );
                 break;
             }
@@ -1821,25 +1838,9 @@ void HAL_ETH_ErrorCallback( ETH_HandleTypeDef * pxEthHandle )
     {
         eErrorEvents |= eMacEventErrDma;
         const uint32_t ulDmaError = HAL_ETH_GetDMAError( pxEthHandle );
-        /* if( ( ulDmaError & ETH_DMA_TX_PROCESS_STOPPED_FLAG ) != 0 ) */
-        /* if( ( ulDmaError & ETH_DMA_CONTEXT_DESC_ERROR_FLAG ) != 0 ) */
-		/* if( ( ulDmaError & ETH_DMA_RX_NO_ERROR_FLAG ) != 0 ) */
-		/* if( ( ulDmaError & ETH_DMA_RX_DESC_READ_ERROR_FLAG ) != 0 ) */
-		/* if( ( ulDmaError & ETH_DMA_RX_DESC_WRITE_ERROR_FLAG ) != 0 ) */
-		/* if( ( ulDmaError & ETH_DMA_RX_BUFFER_READ_ERROR_FLAG ) != 0 ) */
-		/* if( ( ulDmaError & ETH_DMA_RX_BUFFER_WRITE_ERROR_FLAG ) != 0 ) */
-		/* if( ( ulDmaError & ETH_DMA_TX_NO_ERROR_FLAG ) != 0 ) */
-		/* if( ( ulDmaError & ETH_DMA_TX_DESC_READ_ERROR_FLAG ) != 0 ) */
-		/* if( ( ulDmaError & ETH_DMA_TX_DESC_WRITE_ERROR_FLAG ) != 0 ) */
-		/* if( ( ulDmaError & ETH_DMA_TX_BUFFER_READ_ERROR_FLAG ) != 0 ) */
-		/* if( ( ulDmaError & ETH_DMA_TX_BUFFER_WRITE_ERROR_FLAG ) != 0 ) */
-		/* if( ( ulDmaError & ETH_DMA_CONTEXT_DESC_ERROR_FLAG ) != 0 ) */
-		/* if( ( ulDmaError & ETH_DMA_FATAL_BUS_ERROR_FLAG ) != 0 ) */
-		/* if( ( ulDmaError & ETH_DMA_EARLY_TX_IT_FLAG ) != 0 ) */
-		/* if( ( ulDmaError & ETH_DMA_RX_WATCHDOG_TIMEOUT_FLAG ) != 0 ) */
-		/* if( ( ulDmaError & ETH_DMA_RX_PROCESS_STOPPED_FLAG ) != 0 ) */
-		/* if( ( ulDmaError & ETH_DMA_RX_BUFFER_UNAVAILABLE_FLAG ) != 0 ) */
-		/* if( ( ulDmaError & ETH_DMA_TX_PROCESS_STOPPED_FLAG ) != 0 ) */
+		#if ipconfigIS_ENABLED( niEMAC_DEBUG_ERROR )
+        	prvHAL_DMA_ErrorCallback( pxEthHandle );
+		#endif
         #ifdef niEMAC_STM32FX
             if( ( ulDmaError & ETH_DMASR_TBUS ) != 0 )
             {
@@ -1866,14 +1867,9 @@ void HAL_ETH_ErrorCallback( ETH_HandleTypeDef * pxEthHandle )
     if( ( HAL_ETH_GetError( pxEthHandle ) & HAL_ETH_ERROR_MAC ) != 0 )
     {
         eErrorEvents |= eMacEventErrMac;
-        const uint32_t ulMacError = HAL_ETH_GetMACError( pxEthHandle );
-        /* if( ( ulMacError & ETH_RECEIVE_WATCHDOG_TIMEOUT ) != 0 )
-        if( ( ulMacError & ETH_EXECESSIVE_COLLISIONS ) != 0 )
-        if( ( ulMacError & ETH_LATE_COLLISIONS ) != 0 )
-        if( ( ulMacError & ETH_EXECESSIVE_DEFERRAL ) != 0 )
-        if( ( ulMacError & ETH_LOSS_OF_CARRIER ) != 0 )
-        if( ( ulMacError & ETH_NO_CARRIER ) != 0 )
-        if( ( ulMacError & ETH_TRANSMIT_JABBR_TIMEOUT ) != 0 ) */
+		#if ipconfigIS_ENABLED( niEMAC_DEBUG_ERROR )
+        	prvHAL_MAC_ErrorCallback( pxEthHandle );
+		#endif
     }
 
     if( ( xEMACTaskHandle != NULL ) && ( eErrorEvents != eMacEventNone ) )
@@ -2075,6 +2071,186 @@ NetworkInterface_t * pxSTM32_FillInterfaceDescriptor( BaseType_t xEMACIndex, Net
     }
 
 #endif
+
+/*---------------------------------------------------------------------------*/
+/*===========================================================================*/
+/*                      		Debugging                         			 */
+/*===========================================================================*/
+/*---------------------------------------------------------------------------*/
+
+
+
+#if ipconfigIS_ENABLED( niEMAC_DEBUG_ERROR )
+
+static void prvHAL_RX_ErrorCallback( ETH_HandleTypeDef * pxEthHandle )
+{
+	uint32_t ulErrorCode = 0;
+	( void ) HAL_ETH_GetRxDataErrorCode( pxEthHandle, &ulErrorCode );
+    if( ( ulErrorCode & ETH_DRIBBLE_BIT_ERROR ) != 0 )
+    {
+    	static size_t uxRxDBError = 0;
+    	++uxRxDBError;
+    }
+    if( ( ulErrorCode & ETH_RECEIVE_ERROR ) != 0 )
+    {
+    	static size_t uxRxRcvError = 0;
+		++uxRxRcvError;
+    }
+    if( ( ulErrorCode & ETH_RECEIVE_OVERFLOW ) != 0 )
+    {
+    	static size_t uxRxROError = 0;
+		++uxRxROError;
+    }
+    if( ( ulErrorCode & ETH_WATCHDOG_TIMEOUT ) != 0 )
+    {
+    	static size_t uxRxWDTError = 0;
+		++uxRxWDTError;
+    }
+    if( ( ulErrorCode & ETH_GIANT_PACKET ) != 0 )
+    {
+    	static size_t uxRxGPError = 0;
+		++uxRxGPError;
+    }
+    if( ( ulErrorCode & ETH_CRC_ERROR ) != 0 )
+    {
+    	static size_t uxRxCRCError = 0;
+		++uxRxCRCError;
+    }
+}
+
+/*---------------------------------------------------------------------------*/
+
+static void prvHAL_DMA_ErrorCallback( ETH_HandleTypeDef * pxEthHandle )
+{
+    const uint32_t ulDmaError = HAL_ETH_GetDMAError( pxEthHandle );
+	/* if( ( ulDmaError & ETH_DMA_RX_NO_ERROR_FLAG ) != 0 )
+	{
+
+	} */
+	if( ( ulDmaError & ETH_DMA_RX_DESC_READ_ERROR_FLAG ) != 0 )
+	{
+		static size_t uxDmaRDRError = 0;
+		++uxDmaRDRError;
+	}
+	if( ( ulDmaError & ETH_DMA_RX_DESC_WRITE_ERROR_FLAG ) != 0 )
+	{
+		static size_t uxDmaRDWError = 0;
+		++uxDmaRDWError;
+	}
+	if( ( ulDmaError & ETH_DMA_RX_BUFFER_READ_ERROR_FLAG ) != 0 )
+	{
+		static size_t uxDmaRBRError = 0;
+		++uxDmaRBRError;
+	}
+	if( ( ulDmaError & ETH_DMA_RX_BUFFER_WRITE_ERROR_FLAG ) != 0 )
+	{
+		static size_t uxDmaRBWError = 0;
+		++uxDmaRBWError;
+	}
+	/* if( ( ulDmaError & ETH_DMA_TX_NO_ERROR_FLAG ) != 0 )
+	{
+
+	} */
+	if( ( ulDmaError & ETH_DMA_TX_DESC_READ_ERROR_FLAG ) != 0 )
+	{
+		static size_t uxDmaTDRError = 0;
+		++uxDmaTDRError;
+	}
+	if( ( ulDmaError & ETH_DMA_TX_DESC_WRITE_ERROR_FLAG ) != 0 )
+	{
+		static size_t uxDmaTDWError = 0;
+		++uxDmaTDWError;
+	}
+	if( ( ulDmaError & ETH_DMA_TX_BUFFER_READ_ERROR_FLAG ) != 0 )
+	{
+		static size_t uxDmaTBRError = 0;
+		++uxDmaTBRError;
+	}
+	if( ( ulDmaError & ETH_DMA_TX_BUFFER_WRITE_ERROR_FLAG ) != 0 )
+	{
+		static size_t uxDmaTBWError = 0;
+		++uxDmaTBWError;
+	}
+	if( ( ulDmaError & ETH_DMA_CONTEXT_DESC_ERROR_FLAG ) != 0 )
+	{
+		static size_t uxDmaCDError = 0;
+		++uxDmaCDError;
+	}
+	if( ( ulDmaError & ETH_DMA_FATAL_BUS_ERROR_FLAG ) != 0 )
+	{
+		static size_t uxDmaFBEError = 0;
+		++uxDmaFBEError;
+	}
+	if( ( ulDmaError & ETH_DMA_EARLY_TX_IT_FLAG ) != 0 )
+	{
+		static size_t uxDmaETIError = 0;
+		++uxDmaETIError;
+	}
+	if( ( ulDmaError & ETH_DMA_RX_WATCHDOG_TIMEOUT_FLAG ) != 0 )
+	{
+		static size_t uxDmaRWTError = 0;
+		++uxDmaRWTError;
+	}
+	if( ( ulDmaError & ETH_DMA_RX_PROCESS_STOPPED_FLAG ) != 0 )
+	{
+		static size_t uxDmaRPSError = 0;
+		++uxDmaRPSError;
+	}
+	if( ( ulDmaError & ETH_DMA_RX_BUFFER_UNAVAILABLE_FLAG ) != 0 )
+	{
+		static size_t uxDmaRBUError = 0;
+		++uxDmaRBUError;
+	}
+	if( ( ulDmaError & ETH_DMA_TX_PROCESS_STOPPED_FLAG ) != 0 )
+	{
+		static size_t uxDmaTPSError = 0;
+		++uxDmaTPSError;
+	}
+}
+
+/*---------------------------------------------------------------------------*/
+
+static void prvHAL_MAC_ErrorCallback( ETH_HandleTypeDef * pxEthHandle )
+{
+	const uint32_t ulMacError = HAL_ETH_GetMACError( pxEthHandle );
+	if( ( ulMacError & ETH_RECEIVE_WATCHDOG_TIMEOUT ) != 0 )
+	{
+		static size_t uxMacRWTError = 0;
+		++uxMacRWTError;
+	}
+	if( ( ulMacError & ETH_EXECESSIVE_COLLISIONS ) != 0 )
+	{
+		static size_t uxMacECError = 0;
+		++uxMacECError;
+	}
+	if( ( ulMacError & ETH_LATE_COLLISIONS ) != 0 )
+	{
+		static size_t uxMacLCError = 0;
+		++uxMacLCError;
+	}
+	if( ( ulMacError & ETH_EXECESSIVE_DEFERRAL ) != 0 )
+	{
+		static size_t uxMacEDError = 0;
+		++uxMacEDError;
+	}
+	if( ( ulMacError & ETH_LOSS_OF_CARRIER ) != 0 )
+	{
+		static size_t uxMacLOCError = 0;
+		++uxMacLOCError;
+	}
+	if( ( ulMacError & ETH_NO_CARRIER ) != 0 )
+	{
+		static size_t uxMacNCError = 0;
+		++uxMacNCError;
+	}
+	if( ( ulMacError & ETH_TRANSMIT_JABBR_TIMEOUT ) != 0 )
+	{
+		static size_t uxMacTJTError = 0;
+		++uxMacTJTError;
+	}
+}
+
+#endif /* if ipconfigIS_ENABLED( niEMAC_DEBUG_ERROR ) */
 
 /*---------------------------------------------------------------------------*/
 /*===========================================================================*/

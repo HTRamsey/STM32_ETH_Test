@@ -39,4 +39,7 @@
 #define ipconfigUSE_RA 									0
 #define ipconfigSUPPORT_NETWORK_DOWN_EVENT              0
 
+// #define FreeRTOS_htons( usIn ) ( ( uint16_t ) __REVSH( usIn ) )
+// #define FreeRTOS_htonl( usIn ) ( __REV( usIn ) )
+
 #endif /* INC_FREERTOSIPCONFIG_H_ */
