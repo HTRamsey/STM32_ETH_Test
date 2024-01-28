@@ -71,13 +71,13 @@
     #error "Unknown STM32 Family for NetworkInterface"
 #endif
 
-#ifdef LAN8742A_PHY_ADDRESS
-    #include "lan8742/lan8742.h"
-#endif
+/* #ifdef LAN8742A_PHY_ADDRESS */
+#include "lan8742/lan8742.h"
+/* #endif */
 
-#ifdef DP83848_PHY_ADDRESS
-    #include "dp83848/dp83848.h"
-#endif
+/* #ifdef DP83848_PHY_ADDRESS */
+#include "dp83848/dp83848.h"
+/* #endif */
 
 /*---------------------------------------------------------------------------*/
 /*===========================================================================*/
@@ -125,7 +125,7 @@
 #define niEMAC_USE_RMII ipconfigENABLE
 
 #ifdef niEMAC_STM32HX
-    #define niEMAC_AUTO_LOW_POWER   ( ipconfigDISABLE && ipconfigIS_DISABLED( niEMAC_USE_RMII ) )
+    /* #define niEMAC_AUTO_LOW_POWER   ( ipconfigDISABLE && ipconfigIS_DISABLED( niEMAC_USE_RMII ) ) */
     #define niEMAC_TCP_SEGMENTATION ipconfigDISABLE
     #define niEMAC_ARP_OFFLOAD      ipconfigDISABLE
 #endif
@@ -168,18 +168,13 @@
         #error "Invalid ETH_RX_DESC_CNT value for NetworkInterface, must be a multiple of 4"
     #endif
 
-#elif defined( niEMAC_STM32FX )
-
-    #if defined( ETH_RX_BUF_SIZE )
-        #if ipconfigIS_DISABLED( ipconfigPORT_SUPPRESS_WARNING )
-            /* __STM32F7xx_HAL_VERSION, __STM32F4xx_HAL_VERSION */
-            #warning "As of F7 V1.17.1 && F4 V1.28.0, a bug exists in the ETH HAL Driver where ETH_RX_BUF_SIZE is used instead of RxBuffLen, so ETH_RX_BUF_SIZE must == niEMAC_DATA_BUFFER_SIZE"
-        #endif
-    #endif
-
 #endif
 
 #if ipconfigIS_DISABLED( ipconfigPORT_SUPPRESS_WARNING )
+
+	#if defined( niEMAC_STM32FX ) && defined( ETH_RX_BUF_SIZE )
+		#warning "As of F7 V1.17.1 && F4 V1.28.0, a bug exists in the ETH HAL Driver where ETH_RX_BUF_SIZE is used instead of RxBuffLen, so ETH_RX_BUF_SIZE must == niEMAC_DATA_BUFFER_SIZE"
+    #endif
 
     #if ipconfigIS_DISABLED( ipconfigDRIVER_INCLUDED_TX_IP_CHECKSUM )
         #warning "Consider enabling ipconfigDRIVER_INCLUDED_TX_IP_CHECKSUM for NetworkInterface"
@@ -193,25 +188,53 @@
         #warning "Consider enabling ipconfigETHERNET_DRIVER_FILTERS_FRAME_TYPES for NetworkInterface"
     #endif
 
+	/* TODO: There should be a universal check for use in network interfaces, similar to eConsiderFrameForProcessing.
+	 * So, don't use this macro, and filter anyways in the mean time. */
+	/* #if ipconfigIS_DISABLED( ipconfigETHERNET_DRIVER_FILTERS_PACKETS )
+			#warning "Consider enabling ipconfigETHERNET_DRIVER_FILTERS_PACKETS for NetworkInterface"
+	#endif */
+
     #if ipconfigIS_DISABLED( ipconfigUSE_LINKED_RX_MESSAGES )
-        #warning "Consider enabling ipconfigETHERNET_DRIVER_FILTERS_FRAME_TYPES for NetworkInterface"
+        #warning "Consider enabling ipconfigUSE_LINKED_RX_MESSAGES for NetworkInterface"
     #endif
 
 #endif
-
-/* TODO: There should be a universal check for use in network interfaces, similar to eConsiderFrameForProcessing.
- * So, don't use this macro, and filter anyways in the mean time. */
-/* #if ipconfigIS_DISABLED( ipconfigETHERNET_DRIVER_FILTERS_PACKETS )
-    #if ipconfigIS_DISABLED( ipconfigPORT_SUPPRESS_WARNING )
-        #warning "Consider enabling ipconfigETHERNET_DRIVER_FILTERS_PACKETS for NetworkInterface"
-    #endif
-#endif */
 
 /*---------------------------------------------------------------------------*/
 /*===========================================================================*/
 /*                            Macros & Definitions                           */
 /*===========================================================================*/
 /*---------------------------------------------------------------------------*/
+
+#if defined( niEMAC_STM32FX )
+
+	#ifdef ETH_DMA_RX_BUFFER_UNAVAILABLE_FLAG
+		#undef ETH_DMA_RX_BUFFER_UNAVAILABLE_FLAG
+	#endif
+	#define ETH_DMA_RX_BUFFER_UNAVAILABLE_FLAG ETH_DMASR_RBUS
+
+	#ifdef ETH_DMA_TX_BUFFER_UNAVAILABLE_FLAG
+		#undef ETH_DMA_TX_BUFFER_UNAVAILABLE_FLAG
+	#endif
+	#define ETH_DMA_TX_BUFFER_UNAVAILABLE_FLAG ETH_DMASR_TBUS
+
+	/* Note: ETH_CTRLPACKETS_BLOCK_ALL is incorrectly defined in HAL ETH Driver as of F7 V1.17.1 && F4 V1.28.0 */
+	#ifdef ETH_CTRLPACKETS_BLOCK_ALL
+		#undef ETH_CTRLPACKETS_BLOCK_ALL
+	#endif
+	#define ETH_CTRLPACKETS_BLOCK_ALL ETH_MACFFR_PCF_BlockAll
+
+#elif defined( niEMAC_STM32HX )
+
+	#ifdef ETH_DMA_TX_BUFFER_UNAVAILABLE_FLAG
+		#undef ETH_DMA_TX_BUFFER_UNAVAILABLE_FLAG
+	#endif
+	#define ETH_DMA_TX_BUFFER_UNAVAILABLE_FLAG ETH_DMACSR_TBU
+
+	#define ETH_DMA_TX_ERRORS_MASK ETH_DMACSR_TEB
+	#define ETH_DMA_RX_ERRORS_MASK ETH_DMACSR_REB
+
+#endif
 
 #define niEMAC_BUFS_PER_DESC 2U
 
@@ -221,8 +244,6 @@
 #define niEMAC_MAC_IS_UNICAST( MAC )    ( ( MAC[ 0 ] & 1U ) == 0 )
 #define niEMAC_ADDRESS_HASH_BITS    64U
 #define niEMAC_MAC_SRC_MATCH_COUNT  3U
-
-#define niEMAC_DEBUG( X, MSG ) if( ( X ) != 0 ) { FreeRTOS_debug_printf( ( MSG ) ); }
 
 /*---------------------------------------------------------------------------*/
 /*===========================================================================*/
@@ -315,6 +336,7 @@ static void prvInitMacAddresses( ETH_HandleTypeDef * pxEthHandle, NetworkInterfa
 #ifdef niEMAC_STM32HX
     static void prvInitPacketFilter( ETH_HandleTypeDef * pxEthHandle, const NetworkInterface_t * const pxInterface );
 #endif
+static BaseType_t prvPhyInit( ETH_HandleTypeDef * pxEthHandle, EthernetPhy_t * pxPhyObject );
 static BaseType_t prvPhyStart( ETH_HandleTypeDef * pxEthHandle, NetworkInterface_t * pxInterface, EthernetPhy_t * pxPhyObject );
 
 /* MAC Filtering Helpers */
@@ -356,27 +378,12 @@ NetworkInterface_t * pxSTM32_FillInterfaceDescriptor( BaseType_t xEMACIndex, Net
 static ETH_HandleTypeDef xEthHandle;
 
 static EthernetPhy_t xPhyObject;
-
-/* #ifdef LAN8742A_PHY_ADDRESS
-    static lan8742_Object_t xLan8742aObject;
-    static lan8742_IOCtx_t xLan8742aControl = {
-        .Init = NULL,
-        .DeInit = NULL,
-        .WriteReg = &prvPhyWriteReg,
-        .ReadReg = &prvPhyReadReg,
-        .GetTick = &HAL_GetTick,
-    };
-#endif
-#ifdef DP83848_PHY_ADDRESS
-    static dp83848_Object_t xDp83848Object;
-    static dp83848_IOCtx_t xDp83848Control = {
-        .Init = NULL,
-        .DeInit = NULL,
-        .WriteReg = &prvPhyWriteReg,
-        .ReadReg = &prvPhyReadReg,
-        .GetTick = &HAL_GetTick,
-    };
-#endif */
+/* union {
+	lan8742_Object_t * pxLan8742aObject;
+	dp83848_Object_t * pxDp83848Object;
+}; */
+static lan8742_Object_t * pxLan8742aObject = NULL;
+static dp83848_Object_t * pxDp83848Object = NULL;
 
 static TaskHandle_t xEMACTaskHandle = NULL;
 static SemaphoreHandle_t xTxMutex = NULL, xTxDescSem = NULL;
@@ -474,23 +481,11 @@ static BaseType_t prvNetworkInterfaceInitialise( NetworkInterface_t * pxInterfac
             /* fallthrough */
 
         case eMacPhyInit:
-            vPhyInitialise( pxPhyObject, ( xApplicationPhyReadHook_t ) prvPhyReadReg, ( xApplicationPhyWriteHook_t ) prvPhyWriteReg );
-
-            if( xPhyDiscover( pxPhyObject ) == 0 )
-            {
-                FreeRTOS_debug_printf( ( "prvNetworkInterfaceInitialise: eMacPhyInit failed\n" ) );
-                break;
-            }
-
-            /* #ifdef LAN8742A_PHY_ADDRESS
-                ( void ) LAN8742_RegisterBusIO( &xLan8742aObject, &xLan8742aControl );
-                ( void ) LAN8742_EnableIT( LAN8742_LINK_DOWN_IT );
-            #endif
-            #ifdef DP83848_PHY_ADDRESS
-                ( void ) DP83848_RegisterBusIO( &xDp83848Object, &xDp83848Control );
-                ( void ) DP83848_EnableIT( DP83848_LINK_DOWN_IT );
-            #endif */
-            /* __HAL_ETH_MAC_ENABLE_IT( pxEthHandle, ETH_MAC_PHY_IT ); */
+        	if( prvPhyInit( pxEthHandle, pxPhyObject ) == pdFALSE )
+			{
+				FreeRTOS_debug_printf( ( "prvNetworkInterfaceInitialise: eMacPhyInit failed\n" ) );
+				break;
+			}
 
             xMacInitStatus = eMacPhyStart;
             /* fallthrough */
@@ -691,6 +686,12 @@ static BaseType_t prvNetworkInterfaceOutput( NetworkInterface_t * pxInterface, N
         xTxConfig.TxBuffer = &xTxBuffer;
         xTxConfig.Length = xTxBuffer.len;
 
+        /* TODO: Queue Tx Output? */
+		/* if( xQueueSendToBack( xTxQueue, pxDescriptor, 0 ) != pdPASS )
+		{
+			xReleaseAfterSend = pdFALSE;
+		} */
+
         if( xSemaphoreTake( xTxDescSem, pdMS_TO_TICKS( niEMAC_DESCRIPTOR_WAIT_TIME_MS ) ) == pdFALSE )
         {
             FreeRTOS_debug_printf( ( "xNetworkInterfaceOutput: No Descriptors Available\n" ) );
@@ -701,7 +702,6 @@ static BaseType_t prvNetworkInterfaceOutput( NetworkInterface_t * pxInterface, N
         {
             FreeRTOS_debug_printf( ( "xNetworkInterfaceOutput: Process Busy\n" ) );
             ( void ) xSemaphoreGive( xTxDescSem );
-            /* TODO: Can we queue it? */
             break;
         }
 
@@ -715,8 +715,9 @@ static BaseType_t prvNetworkInterfaceOutput( NetworkInterface_t * pxInterface, N
         {
             ( void ) xSemaphoreGive( xTxDescSem );
             configASSERT( HAL_ETH_GetState( pxEthHandle ) == HAL_ETH_STATE_STARTED );
-            niEMAC_DEBUG( ( HAL_ETH_GetError( pxEthHandle ) & HAL_ETH_ERROR_BUSY ) != 0, "xNetworkInterfaceOutput: Tx Busy\n" );
-            /* Add to queue? */
+            /* Should be impossible if semaphores are correctly implemented */
+            configASSERT( ( HAL_ETH_GetError( pxEthHandle ) & HAL_ETH_ERROR_BUSY ) == 0 );
+
         }
         ( void ) xSemaphoreGive( xTxMutex );
 
@@ -1044,12 +1045,13 @@ static BaseType_t prvEthConfigInit( ETH_HandleTypeDef * pxEthHandle, NetworkInte
 
             #if defined( niEMAC_STM32HX )
                 prvInitPacketFilter( pxEthHandle, pxInterface );
+
+                /* HAL_ETHEx_DisableARPOffload( pxEthHandle );
+                HAL_ETHEx_SetARPAddressMatch( pxEthHandle, ulSourceIPAddress );
+                HAL_ETHEx_EnableARPOffload( pxEthHandle ); */
             #endif
 
             prvInitMacAddresses( pxEthHandle, pxInterface );
-
-            /* __HAL_ETH_MAC_ENABLE_IT( pxEthHandle, ETH_MAC_RX_STATUS_IT ); */
-			/* __HAL_ETH_MAC_ENABLE_IT( pxEthHandle, ETH_MAC_TX_STATUS_IT ); */
 
             xResult = pdTRUE;
         }
@@ -1113,12 +1115,7 @@ static void prvInitMacAddresses( ETH_HandleTypeDef * pxEthHandle, NetworkInterfa
     xFilterConfig.HachOrPerfectFilter = ENABLE;
     xFilterConfig.SrcAddrFiltering = DISABLE;
     xFilterConfig.SrcAddrInverseFiltering = DISABLE;
-    #ifdef niEMAC_STM32FX
-        /* Note: ETH_CTRLPACKETS_BLOCK_ALL is incorrectly defined in HAL ETH Driver as of F7 V1.17.1 && F4 V1.28.0 */
-        xFilterConfig.ControlPacketsFilter = ETH_MACFFR_PCF_BlockAll;
-    #else
-        xFilterConfig.ControlPacketsFilter = ETH_CTRLPACKETS_BLOCK_ALL;
-    #endif
+	xFilterConfig.ControlPacketsFilter = ETH_CTRLPACKETS_BLOCK_ALL;
     xFilterConfig.BroadcastFilter = ENABLE;
     xFilterConfig.PassAllMulticast = DISABLE;
     xFilterConfig.DestAddrInverseFiltering = DISABLE;
@@ -1283,6 +1280,62 @@ static void prvInitPacketFilter( ETH_HandleTypeDef * pxEthHandle, const NetworkI
 
 /*---------------------------------------------------------------------------*/
 
+static BaseType_t prvPhyInit( ETH_HandleTypeDef * pxEthHandle, EthernetPhy_t * pxPhyObject )
+{
+	BaseType_t xResult = pdFAIL;
+
+	vPhyInitialise( pxPhyObject, ( xApplicationPhyReadHook_t ) prvPhyReadReg, ( xApplicationPhyWriteHook_t ) prvPhyWriteReg );
+
+	if( xPhyDiscover( pxPhyObject ) != 0 )
+	{
+		for( size_t uxCount = 0; uxCount < pxPhyObject->xPortCount; ++uxCount )
+		{
+			if( pxPhyObject->ulPhyIDs[ uxCount ] == PHY_ID_LAN8742A )
+			{
+				static lan8742_Object_t xLan8742aObject;
+				xLan8742aObject.DevAddr = pxPhyObject->ucPhyIndexes[ uxCount ];
+				lan8742_IOCtx_t xLan8742aControl = {
+					.Init = NULL,
+					.DeInit = NULL,
+					.WriteReg = ( lan8742_WriteReg_Func ) &prvPhyWriteReg,
+					.ReadReg = ( lan8742_ReadReg_Func ) &prvPhyReadReg,
+					.GetTick = ( lan8742_GetTick_Func ) &HAL_GetTick,
+				};
+				pxLan8742aObject = &xLan8742aObject;
+				( void ) LAN8742_RegisterBusIO( pxLan8742aObject, &xLan8742aControl );
+				if( LAN8742_EnableIT( pxLan8742aObject, LAN8742_LINK_DOWN_IT ) == LAN8742_STATUS_OK )
+				{
+					__HAL_ETH_MAC_ENABLE_IT( pxEthHandle, ETH_MAC_PHY_IT );
+				}
+				break;
+			}
+			else if( pxPhyObject->ulPhyIDs[ uxCount ] == PHY_ID_DP83848I )
+			{
+				static dp83848_Object_t xDp83848Object;
+				xDp83848Object.DevAddr = pxPhyObject->ucPhyIndexes[ uxCount ];
+				dp83848_IOCtx_t xDp83848Control = {
+					.Init = NULL,
+					.DeInit = NULL,
+					.WriteReg = ( dp83848_WriteReg_Func ) &prvPhyWriteReg,
+					.ReadReg = ( dp83848_ReadReg_Func ) &prvPhyReadReg,
+					.GetTick = ( dp83848_GetTick_Func ) &HAL_GetTick,
+				};
+				pxDp83848Object = &xDp83848Object;
+				( void ) DP83848_RegisterBusIO( pxDp83848Object, &xDp83848Control );
+				if( DP83848_EnableIT( pxDp83848Object, DP83848_LINK_DOWN_IT ) == DP83848_STATUS_OK )
+				{
+					__HAL_ETH_MAC_ENABLE_IT( pxEthHandle, ETH_MAC_PHY_IT );
+				}
+				break;
+			}
+		}
+
+		xResult = pdPASS;
+	}
+
+	return xResult;
+}
+
 static BaseType_t prvPhyStart( ETH_HandleTypeDef * pxEthHandle, NetworkInterface_t * pxInterface, EthernetPhy_t * pxPhyObject )
 {
     BaseType_t xResult = pdFALSE;
@@ -1308,8 +1361,8 @@ static BaseType_t prvPhyStart( ETH_HandleTypeDef * pxEthHandle, NetworkInterface
         };
 
         #if ipconfigIS_DISABLED( niEMAC_AUTO_NEGOTIATION )
-            pxPhyObject->xPhyPreferences.ucSpeed = ipconfigIS_ENABLED( niEMAC_USE_100MB ) ? PHY_SPEED_100 : PHY_SPEED_10;
-            pxPhyObject->xPhyPreferences.ucDuplex = ipconfigIS_ENABLED( niEMAC_USE_FULL_DUPLEX ) ? PHY_DUPLEX_FULL : PHY_DUPLEX_HALF;
+            pxPhyObject->xPhyPreferences.ucSpeed = xPhyProperties.ucSpeed;
+            pxPhyObject->xPhyPreferences.ucDuplex = xPhyProperties.ucDuplex;
         #endif
 
         if( xPhyConfigure( pxPhyObject, &xPhyProperties ) == 0 )
@@ -1598,12 +1651,12 @@ static BaseType_t prvMacUpdateConfig( ETH_HandleTypeDef * pxEthHandle, EthernetP
         xResult = pdTRUE;
     }
 
-    #if ipconfigIS_ENABLED( niEMAC_AUTO_LOW_POWER )
+    /* #if ipconfigIS_ENABLED( niEMAC_AUTO_LOW_POWER )
         if( ( pxEthHandle->Init.MediaInterface = HAL_ETH_MII_MODE ) && ( xMACConfig.DuplexMode == ETH_FULLDUPLEX_MODE ) && ( xMACConfig.Speed == ETH_SPEED_100M ) )
         {
             HAL_ETHEx_EnterLPIMode( pxEthHandle, ENABLE, DISABLE );
         }
-    #endif
+    #endif */
 
     return xResult;
 }
@@ -1675,104 +1728,80 @@ static BaseType_t prvAcceptPacket( const NetworkBufferDescriptor_t * const pxDes
             break;
         }
 
-        const ETH_DMADescTypeDef * const ulRxDesc = ( const ETH_DMADescTypeDef * const ) pxEthHandle->RxDescList.RxDesc[ pxEthHandle->RxDescList.RxDescIdx ];
-
-        const uint32_t ulRxDesc1 = ulRxDesc->DESC1;
-        /* if( READ_BIT( ulRxDesc1 , ETH_CHECKSUM_IP_PAYLOAD_ERROR ) != RESET )
-		if( READ_BIT( ulRxDesc1 , ETH_CHECKSUM_BYPASSED ) != RESET )
-		if( READ_BIT( ulRxDesc1 , ETH_CHECKSUM_IP_HEADER_ERROR ) != RESET ) */
-
-		if( READ_BIT( ulRxDesc1, ETH_IP_HEADER_IPV4 ) != RESET )
-        {
-            #if ipconfigIS_DISABLED( ipconfigUSE_IPv4 )
+		#if ipconfigIS_ENABLED( ipconfigETHERNET_DRIVER_FILTERS_FRAME_TYPES )
+			if( eConsiderFrameForProcessing( pxDescriptor->pucEthernetBuffer ) != eProcessBuffer )
+			{
 				iptraceETHERNET_RX_EVENT_LOST();
-               break;
-            #else
-               /* prvAllowIPPacketIPv4(); */
-            #endif
-        }
-		else if( READ_BIT( ulRxDesc1, ETH_IP_HEADER_IPV6 ) != RESET )
-        {
-            #if ipconfigIS_DISABLED( ipconfigUSE_IPv6 )
-				iptraceETHERNET_RX_EVENT_LOST();
+				FreeRTOS_debug_printf( ( "prvAcceptPacket: Frame discarded\n" ) );
 				break;
-            #else
-                /* prvAllowIPPacketIPv6(); */
-            #endif
-        }
+			}
+		#endif
 
-        /* if( READ_BIT( ulRxDesc1, ETH_DMARXNDESCWBF_PT ) == ETH_IP_PAYLOAD_UDP )
-        {
-            prvProcessUDPPacket();
-        } */
-        if( READ_BIT( ulRxDesc1, ETH_DMARXNDESCWBF_PT ) == ETH_IP_PAYLOAD_ICMPN )
-        {
-			#if ipconfigIS_DISABLED( ipconfigREPLY_TO_INCOMING_PINGS ) && ipconfigIS_DISABLED( ipconfigSUPPORT_OUTGOING_PINGS )
-        		iptraceETHERNET_RX_EVENT_LOST();
-        		break;
-			#else
-        		/* ProcessICMPPacket(); */
+		#if ipconfigIS_ENABLED( ipconfigETHERNET_DRIVER_FILTERS_PACKETS )
+			#ifdef niEMAC_STM32HX
+				const ETH_DMADescTypeDef * const ulRxDesc = ( const ETH_DMADescTypeDef * const ) pxEthHandle->RxDescList.RxDesc[ pxEthHandle->RxDescList.RxDescIdx ];
+
+				const uint32_t ulRxDesc1 = ulRxDesc->DESC1;
+
+                if( READ_BIT( ulRxDesc1 , ETH_CHECKSUM_IP_PAYLOAD_ERROR ) != RESET )
+                {
+                    iptraceETHERNET_RX_EVENT_LOST();
+                    break;
+                }
+
+                if( READ_BIT( ulRxDesc1 , ETH_CHECKSUM_IP_HEADER_ERROR ) != RESET )
+                {
+                    iptraceETHERNET_RX_EVENT_LOST();
+                    break;
+                }
+
+				if( READ_BIT( ulRxDesc1, ETH_IP_HEADER_IPV4 ) != RESET )
+				{
+					/* Should be impossible if hardware filtering is implemented correctly */
+					configASSERT( ipconfigIS_ENABLED( ipconfigUSE_IPv4 ) );
+					#if ipconfigIS_ENABLED( ipconfigUSE_IPv4 )
+					   /* prvAllowIPPacketIPv4(); */
+					#endif
+				}
+				else if( READ_BIT( ulRxDesc1, ETH_IP_HEADER_IPV6 ) != RESET )
+				{
+					/* Should be impossible if hardware filtering is implemented correctly */
+					configASSERT( ipconfigIS_ENABLED( ipconfigUSE_IPv6 ) );
+					#if ipconfigIS_ENABLED( ipconfigUSE_IPv6 )
+						/* prvAllowIPPacketIPv6(); */
+					#endif
+				}
+
+				const uint32_t ulPacketType = READ_BIT( ulRxDesc1, ETH_DMARXNDESCWBF_PT );
+				if( ulPacketType == ETH_IP_PAYLOAD_UNKNOWN )
+				{
+					iptraceETHERNET_RX_EVENT_LOST();
+					break;
+				}
+				else if( ulPacketType == ETH_IP_PAYLOAD_UDP )
+				{
+					/* prvProcessUDPPacket(); */
+				}
+				else if( ulPacketType == ETH_IP_PAYLOAD_ICMPN )
+				{
+					#if ipconfigIS_DISABLED( ipconfigREPLY_TO_INCOMING_PINGS ) && ipconfigIS_DISABLED( ipconfigSUPPORT_OUTGOING_PINGS )
+						iptraceETHERNET_RX_EVENT_LOST();
+						break;
+					#else
+						/* ProcessICMPPacket(); */
+					#endif
+				}
+				else if( ulPacketType == ETH_IP_PAYLOAD_TCP )
+				{
+					/* Should be impossible if hardware filtering is implemented correctly */
+					configASSERT( ipconfigIS_ENABLED( ipconfigUSE_TCP ) );
+					#if ipconfigIS_ENABLED( ipconfigUSE_TCP )
+						/* xProcessReceivedTCPPacket() */
+					#endif
+				}
 			#endif
-        }
-		if( READ_BIT( ulRxDesc1, ETH_DMARXNDESCWBF_PT ) == ETH_IP_PAYLOAD_UNKNOWN )
-        {
-			iptraceETHERNET_RX_EVENT_LOST();
-            break;
-        }
-		if( READ_BIT( ulRxDesc1, ETH_DMARXNDESCWBF_PT ) == ETH_IP_PAYLOAD_TCP )
-        {
-            #if ipconfigIS_DISABLED( ipconfigUSE_TCP )
-				iptraceETHERNET_RX_EVENT_LOST();
-                break;
-            #else
-                /* xProcessReceivedTCPPacket() */
-            #endif
-        }
 
-        /* const uint32_t ulRxDesc2 = ulRxDesc->DESC2;
-		if( READ_BIT( ulRxDesc2, ETH_DMARXNDESCWBF_L3L4FM ) != RESET )
-		if( READ_BIT( ulRxDesc2, ETH_DMARXNDESCWBF_L4FM ) != RESET )
-		if( READ_BIT( ulRxDesc2, ETH_DMARXNDESCWBF_L3FM ) != RESET )
-
-		if( READ_BIT( ulRxDesc2, ETH_DMARXNDESCWBF_MADRM ) != RESET )
-
-		if( READ_BIT( ulRxDesc2, ETH_DMARXNDESCWBF_HF ) != RESET )
-		if( READ_BIT( ulRxDesc2, ETH_DMARXNDESCWBF_DAF ) != RESET )
-		if( READ_BIT( ulRxDesc2, ETH_DMARXNDESCWBF_SAF ) != RESET )
-		if( READ_BIT( ulRxDesc2, ETH_DMARXNDESCWBF_VF ) != RESET )
-
-		if( READ_BIT( ulRxDesc2, ETH_DMARXNDESCWBF_ARPNR ) != RESET ) */
-
-        /* const uint32_t ulRxDesc3 = ulRxDesc->DESC3; */
-        /* #if ipconfigIS_ENABLED( niEMAC_ARP_OFFLOAD )
-            if( READ_BIT( ulRxDesc3, ETH_DMARXNDESCWBF_LT ) == ETH_DMARXNDESCWBF_LT_ARP )
-            {
-                const IPPacket_t * const pxIPPacket = ( const IPPacket_t * const ) pxDescriptor->pucEthernetBuffer;
-                const IPHeader_t * const pxIPHeader = &( pxIPPacket->xIPHeader );
-                const uint32_t ulSourceIPAddress = pxIPHeader->ulSourceIPAddress;
-                HAL_ETHEx_DisableARPOffload( pxEthHandle );
-                HAL_ETHEx_SetARPAddressMatch( pxEthHandle, ulSourceIPAddress );
-                HAL_ETHEx_EnableARPOffload( pxEthHandle );
-            }
-        #endif */
-		/* if( READ_BIT( ulRxDesc3, ETH_DMARXNDESCWBF_RS2V ) != RESET )
-		if( READ_BIT( ulRxDesc3, ETH_DMARXNDESCWBF_RS1V ) != RESET )
-		if( READ_BIT( ulRxDesc3, ETH_DMARXNDESCWBF_RS0V ) != RESET )
-
-		if( READ_BIT( ulRxDesc3, ETH_DMARXNDESCWBF_ES ) != RESET ) */
-
-        /* TODO: Should we do this even if it is handled in hardware too? */
-        #if ipconfigIS_ENABLED( ipconfigETHERNET_DRIVER_FILTERS_FRAME_TYPES )
-            if( eConsiderFrameForProcessing( pxDescriptor->pucEthernetBuffer ) != eProcessBuffer )
-            {
-            	iptraceETHERNET_RX_EVENT_LOST();
-                FreeRTOS_debug_printf( ( "prvAcceptPacket: Frame discarded\n" ) );
-                break;
-            }
-        #endif
-
-        /* TODO: Create a eConsiderPacketForProcessing */
-        #if ipconfigIS_ENABLED( ipconfigETHERNET_DRIVER_FILTERS_PACKETS )
+			/* TODO: Create a eConsiderPacketForProcessing */
             if( eConsiderPacketForProcessing( pxDescriptor->pucEthernetBuffer ) != eProcessBuffer )
             {
             	iptraceETHERNET_RX_EVENT_LOST();
@@ -1803,21 +1832,23 @@ void ETH_IRQHandler( void )
     xSwitchRequired = pdFALSE;
     HAL_ETH_IRQHandler( pxEthHandle );
 
-    /* if( __HAL_ETH_MAC_GET_IT( pxEthHandle, ETH_MAC_PHY_IT ) )
+    if( __HAL_ETH_MAC_GET_IT( pxEthHandle, ETH_MAC_PHY_IT ) == SET )
     {
-        #ifdef LAN8742A_PHY_ADDRESS
-            if( LAN8742_GetITStatus( &xLan8742aObject, LAN8742_LINK_DOWN_IT ) )
+        if( pxLan8742aObject != NULL )
+        {
+            if( LAN8742_GetITStatus( pxLan8742aObject, LAN8742_LINK_DOWN_IT ) )
             {
-                LAN8742_ClearIT( &xLan8742aObject, LAN8742_LINK_DOWN_IT );
+                LAN8742_ClearIT( pxLan8742aObject, LAN8742_LINK_DOWN_IT );
             }
-        #endif
-        #ifdef DP83848_PHY_ADDRESS
-            if( DP83848_GetITStatus( &xLan8742aObject, LAN8742_LINK_DOWN_IT ) )
+        }
+        if( pxDp83848Object != NULL )
+        {
+            if( DP83848_GetITStatus( pxDp83848Object, DP83848_LINK_DOWN_IT ) )
             {
-                DP83848_ClearIT( &xLan8742aObject, LAN8742_LINK_DOWN_IT );
+                DP83848_ClearIT( pxDp83848Object, DP83848_LINK_DOWN_IT );
             }
-        #endif
-    } */
+        }
+    }
 
     portYIELD_FROM_ISR( xSwitchRequired );
 }
@@ -1841,27 +1872,15 @@ void HAL_ETH_ErrorCallback( ETH_HandleTypeDef * pxEthHandle )
 		#if ipconfigIS_ENABLED( niEMAC_DEBUG_ERROR )
         	prvHAL_DMA_ErrorCallback( pxEthHandle );
 		#endif
-        #ifdef niEMAC_STM32FX
-            if( ( ulDmaError & ETH_DMASR_TBUS ) != 0 )
-            {
-                eErrorEvents |= eMacEventErrTx;
-            }
+		if( ( ulDmaError & ETH_DMA_TX_BUFFER_UNAVAILABLE_FLAG ) != 0 )
+		{
+			eErrorEvents |= eMacEventErrTx;
+		}
 
-            if( ( ulDmaError & ETH_DMASR_RBUS ) != 0 )
-            {
-                eErrorEvents |= eMacEventErrRx;
-            }
-        #elif defined( niEMAC_STM32HX )
-            if( ( ulDmaError & ETH_DMACSR_TBU ) != 0 )
-            {
-                eErrorEvents |= eMacEventErrTx;
-            }
-
-            if( ( ulDmaError & ETH_DMA_RX_BUFFER_UNAVAILABLE_FLAG ) != 0 )
-            {
-                eErrorEvents |= eMacEventErrRx;
-            }
-        #endif
+		if( ( ulDmaError & ETH_DMA_RX_BUFFER_UNAVAILABLE_FLAG ) != 0 )
+		{
+			eErrorEvents |= eMacEventErrRx;
+		}
     }
 
     if( ( HAL_ETH_GetError( pxEthHandle ) & HAL_ETH_ERROR_MAC ) != 0 )
@@ -1958,7 +1977,6 @@ void HAL_ETH_RxAllocateCallback( uint8_t ** ppucBuff )
     const NetworkBufferDescriptor_t * pxBufferDescriptor = pxGetNetworkBufferWithDescriptor( niEMAC_DATA_BUFFER_SIZE, pdMS_TO_TICKS( niEMAC_DESCRIPTOR_WAIT_TIME_MS ) );
     if( pxBufferDescriptor != NULL )
     {
-        /* TODO: Should any other checks be performed on pxBufferDescriptor? */
         *ppucBuff = pxBufferDescriptor->pucEthernetBuffer;
     }
     else
@@ -2078,15 +2096,13 @@ NetworkInterface_t * pxSTM32_FillInterfaceDescriptor( BaseType_t xEMACIndex, Net
 /*===========================================================================*/
 /*---------------------------------------------------------------------------*/
 
-
-
-#if ipconfigIS_ENABLED( niEMAC_DEBUG_ERROR )
+#if defined( niEMAC_STM32HX ) && ipconfigIS_ENABLED( niEMAC_DEBUG_ERROR )
 
 static void prvHAL_RX_ErrorCallback( ETH_HandleTypeDef * pxEthHandle )
 {
 	uint32_t ulErrorCode = 0;
 	( void ) HAL_ETH_GetRxDataErrorCode( pxEthHandle, &ulErrorCode );
-    if( ( ulErrorCode & ETH_DRIBBLE_BIT_ERROR ) != 0 )
+    if( ( pxEthHandle->Init.MediaInterface == HAL_ETH_MII_MODE ) && ( ( ulErrorCode & ETH_DRIBBLE_BIT_ERROR ) != 0 ) )
     {
     	static size_t uxRxDBError = 0;
     	++uxRxDBError;
@@ -2123,53 +2139,51 @@ static void prvHAL_RX_ErrorCallback( ETH_HandleTypeDef * pxEthHandle )
 static void prvHAL_DMA_ErrorCallback( ETH_HandleTypeDef * pxEthHandle )
 {
     const uint32_t ulDmaError = HAL_ETH_GetDMAError( pxEthHandle );
-	/* if( ( ulDmaError & ETH_DMA_RX_NO_ERROR_FLAG ) != 0 )
+	if( ( ulDmaError & ETH_DMA_RX_ERRORS_MASK ) != ETH_DMA_RX_NO_ERROR_FLAG )
 	{
-
-	} */
-	if( ( ulDmaError & ETH_DMA_RX_DESC_READ_ERROR_FLAG ) != 0 )
-	{
-		static size_t uxDmaRDRError = 0;
-		++uxDmaRDRError;
+		if( ( ulDmaError & ETH_DMA_RX_ERRORS_MASK ) == ETH_DMA_RX_DESC_READ_ERROR_FLAG )
+		{
+			static size_t uxDmaRDRError = 0;
+			++uxDmaRDRError;
+		}
+		else if( ( ulDmaError & ETH_DMA_RX_ERRORS_MASK ) == ETH_DMA_RX_DESC_WRITE_ERROR_FLAG )
+		{
+			static size_t uxDmaRDWError = 0;
+			++uxDmaRDWError;
+		}
+		else if( ( ulDmaError & ETH_DMA_RX_ERRORS_MASK ) == ETH_DMA_RX_BUFFER_READ_ERROR_FLAG )
+		{
+			static size_t uxDmaRBRError = 0;
+			++uxDmaRBRError;
+		}
+		else if( ( ulDmaError & ETH_DMA_RX_ERRORS_MASK ) == ETH_DMA_RX_BUFFER_WRITE_ERROR_FLAG )
+		{
+			static size_t uxDmaRBWError = 0;
+			++uxDmaRBWError;
+		}
 	}
-	if( ( ulDmaError & ETH_DMA_RX_DESC_WRITE_ERROR_FLAG ) != 0 )
+	if( ( ulDmaError & ETH_DMA_TX_ERRORS_MASK ) != ETH_DMA_TX_NO_ERROR_FLAG )
 	{
-		static size_t uxDmaRDWError = 0;
-		++uxDmaRDWError;
-	}
-	if( ( ulDmaError & ETH_DMA_RX_BUFFER_READ_ERROR_FLAG ) != 0 )
-	{
-		static size_t uxDmaRBRError = 0;
-		++uxDmaRBRError;
-	}
-	if( ( ulDmaError & ETH_DMA_RX_BUFFER_WRITE_ERROR_FLAG ) != 0 )
-	{
-		static size_t uxDmaRBWError = 0;
-		++uxDmaRBWError;
-	}
-	/* if( ( ulDmaError & ETH_DMA_TX_NO_ERROR_FLAG ) != 0 )
-	{
-
-	} */
-	if( ( ulDmaError & ETH_DMA_TX_DESC_READ_ERROR_FLAG ) != 0 )
-	{
-		static size_t uxDmaTDRError = 0;
-		++uxDmaTDRError;
-	}
-	if( ( ulDmaError & ETH_DMA_TX_DESC_WRITE_ERROR_FLAG ) != 0 )
-	{
-		static size_t uxDmaTDWError = 0;
-		++uxDmaTDWError;
-	}
-	if( ( ulDmaError & ETH_DMA_TX_BUFFER_READ_ERROR_FLAG ) != 0 )
-	{
-		static size_t uxDmaTBRError = 0;
-		++uxDmaTBRError;
-	}
-	if( ( ulDmaError & ETH_DMA_TX_BUFFER_WRITE_ERROR_FLAG ) != 0 )
-	{
-		static size_t uxDmaTBWError = 0;
-		++uxDmaTBWError;
+		if( ( ulDmaError & ETH_DMA_TX_ERRORS_MASK ) == ETH_DMA_TX_DESC_READ_ERROR_FLAG )
+		{
+			static size_t uxDmaTDRError = 0;
+			++uxDmaTDRError;
+		}
+		else if( ( ulDmaError & ETH_DMA_TX_ERRORS_MASK ) == ETH_DMA_TX_DESC_WRITE_ERROR_FLAG )
+		{
+			static size_t uxDmaTDWError = 0;
+			++uxDmaTDWError;
+		}
+		else if( ( ulDmaError & ETH_DMA_TX_ERRORS_MASK ) == ETH_DMA_TX_BUFFER_READ_ERROR_FLAG )
+		{
+			static size_t uxDmaTBRError = 0;
+			++uxDmaTBRError;
+		}
+		else if( ( ulDmaError & ETH_DMA_TX_ERRORS_MASK ) == ETH_DMA_TX_BUFFER_WRITE_ERROR_FLAG )
+		{
+			static size_t uxDmaTBWError = 0;
+			++uxDmaTBWError;
+		}
 	}
 	if( ( ulDmaError & ETH_DMA_CONTEXT_DESC_ERROR_FLAG ) != 0 )
 	{
@@ -2250,11 +2264,11 @@ static void prvHAL_MAC_ErrorCallback( ETH_HandleTypeDef * pxEthHandle )
 	}
 }
 
-#endif /* if ipconfigIS_ENABLED( niEMAC_DEBUG_ERROR ) */
+#endif /* if defined( niEMAC_STM32HX ) && ipconfigIS_ENABLED( niEMAC_DEBUG_ERROR ) */
 
 /*---------------------------------------------------------------------------*/
 /*===========================================================================*/
-/*                          Sample HAL_ETH_MspInit                           */
+/*                          Sample HAL User Functions                        */
 /*===========================================================================*/
 /*---------------------------------------------------------------------------*/
 
@@ -2265,9 +2279,9 @@ static void prvHAL_MAC_ErrorCallback( ETH_HandleTypeDef * pxEthHandle )
   * @param  heth: ETH handle
   * @retval None
 */
-void HAL_ETH_MspInit( ETH_HandleTypeDef * heth )
+void HAL_ETH_MspInit( ETH_HandleTypeDef * pxEthHandle )
 {
-    if( heth->Instance == ETH )
+    if( pxEthHandle->Instance == ETH )
     {
         /* Enable ETHERNET clock */
         #ifdef niEMAC_STM32FX
@@ -2328,66 +2342,66 @@ void HAL_ETH_MspInit( ETH_HandleTypeDef * heth )
 
         GPIO_InitStructure.Pin = ETH_MDC_Pin;
         GPIO_InitStructure.Speed = GPIO_SPEED_MEDIUM;
-        HAL_GPIO_Init(ETH_MDC_Port, &GPIO_InitStructure);
+        HAL_GPIO_Init( ETH_MDC_Port, &GPIO_InitStructure );
         GPIO_InitStructure.Speed = GPIO_SPEED_HIGH;
 
         GPIO_InitStructure.Pin = ETH_MDIO_Pin;
-        HAL_GPIO_Init(ETH_MDIO_Port, &GPIO_InitStructure);
+        HAL_GPIO_Init( ETH_MDIO_Port, &GPIO_InitStructure );
 
         GPIO_InitStructure.Pin = ETH_RXD0_Pin;
-        HAL_GPIO_Init(ETH_RXD0_Port, &GPIO_InitStructure);
+        HAL_GPIO_Init( ETH_RXD0_Port, &GPIO_InitStructure );
 
         GPIO_InitStructure.Pin = ETH_RXD1_Pin;
-        HAL_GPIO_Init(ETH_RXD1_Port, &GPIO_InitStructure);
+        HAL_GPIO_Init( ETH_RXD1_Port, &GPIO_InitStructure );
 
         GPIO_InitStructure.Pin = ETH_TX_EN_Pin;
-        HAL_GPIO_Init(ETH_TX_EN_Port, &GPIO_InitStructure);
+        HAL_GPIO_Init( ETH_TX_EN_Port, &GPIO_InitStructure );
 
         GPIO_InitStructure.Pin = ETH_TXD0_Pin;
-        HAL_GPIO_Init(ETH_TXD0_Port, &GPIO_InitStructure);
+        HAL_GPIO_Init( ETH_TXD0_Port, &GPIO_InitStructure );
 
         GPIO_InitStructure.Pin = ETH_TXD1_Pin;
-        HAL_GPIO_Init(ETH_TXD1_Port, &GPIO_InitStructure);
+        HAL_GPIO_Init( ETH_TXD1_Port, &GPIO_InitStructure );
 
-        if( heth->Init.MediaInterface == HAL_ETH_RMII_MODE )
+        if( pxEthHandle->Init.MediaInterface == HAL_ETH_RMII_MODE )
         {
             GPIO_InitStructure.Pin = ETH_REF_CLK_Pin;
-            HAL_GPIO_Init(ETH_REF_CLK_Port, &GPIO_InitStructure);
+            HAL_GPIO_Init( ETH_REF_CLK_Port, &GPIO_InitStructure );
 
             GPIO_InitStructure.Pin = ETH_CRS_DV_Pin;
-            HAL_GPIO_Init(ETH_CRS_DV_Port, &GPIO_InitStructure);
+            HAL_GPIO_Init( ETH_CRS_DV_Port, &GPIO_InitStructure );
         }
-        else if( heth->Init.MediaInterface == HAL_ETH_MII_MODE )
+        else if( pxEthHandle->Init.MediaInterface == HAL_ETH_MII_MODE )
         {
             GPIO_InitStructure.Pin = ETH_RX_CLK_Pin;
-            HAL_GPIO_Init(ETH_RX_CLK_Port, &GPIO_InitStructure);
+            HAL_GPIO_Init( ETH_RX_CLK_Port, &GPIO_InitStructure );
 
             GPIO_InitStructure.Pin = ETH_RX_ER_Pin;
-            HAL_GPIO_Init(ETH_RX_ER_Port, &GPIO_InitStructure);
+            HAL_GPIO_Init( ETH_RX_ER_Port, &GPIO_InitStructure );
 
             GPIO_InitStructure.Pin = ETH_RX_DV_Pin;
-            HAL_GPIO_Init(ETH_RX_DV_Port, &GPIO_InitStructure);
+            HAL_GPIO_Init( ETH_RX_DV_Port, &GPIO_InitStructure );
 
             GPIO_InitStructure.Pin = ETH_RXD2_Pin;
-            HAL_GPIO_Init(ETH_RXD2_Port, &GPIO_InitStructure);
+            HAL_GPIO_Init( ETH_RXD2_Port, &GPIO_InitStructure );
 
             GPIO_InitStructure.Pin = ETH_RXD3_Pin;
-            HAL_GPIO_Init(ETH_RXD3_Port, &GPIO_InitStructure);
+            HAL_GPIO_Init( ETH_RXD3_Port, &GPIO_InitStructure );
 
             GPIO_InitStructure.Pin = ETH_TX_CLK_Pin;
-            HAL_GPIO_Init(ETH_TX_CLK_Port, &GPIO_InitStructure);
+            HAL_GPIO_Init( ETH_TX_CLK_Port, &GPIO_InitStructure );
 
             GPIO_InitStructure.Pin = ETH_TXD2_Pin;
-            HAL_GPIO_Init(ETH_TXD2_Port, &GPIO_InitStructure);
+            HAL_GPIO_Init( ETH_TXD2_Port, &GPIO_InitStructure );
 
             GPIO_InitStructure.Pin = ETH_TXD3_Pin;
-            HAL_GPIO_Init(ETH_TXD3_Port, &GPIO_InitStructure);
+            HAL_GPIO_Init( ETH_TXD3_Port, &GPIO_InitStructure );
 
             GPIO_InitStructure.Pin = ETH_COL_Pin;
-            HAL_GPIO_Init(ETH_COL_Port, &GPIO_InitStructure);
+            HAL_GPIO_Init( ETH_COL_Port, &GPIO_InitStructure );
 
             GPIO_InitStructure.Pin = ETH_CRS_Pin;
-            HAL_GPIO_Init(ETH_CRS_Port, &GPIO_InitStructure);
+            HAL_GPIO_Init( ETH_CRS_Port, &GPIO_InitStructure );
         }
 
         /* Enable the Ethernet global Interrupt */
@@ -2396,15 +2410,85 @@ void HAL_ETH_MspInit( ETH_HandleTypeDef * heth )
     }
 }
 
-#endif /* if 0 */
-
-/*---------------------------------------------------------------------------*/
-/*===========================================================================*/
-/*                            Sample MPU Config                              */
-/*===========================================================================*/
 /*---------------------------------------------------------------------------*/
 
-#if 0
+void HAL_ETH_MspDeInit( ETH_HandleTypeDef * pxEthHandle )
+{
+	if( pxEthHandle->Instance == ETH )
+	{
+		/* Peripheral clock disable */
+		#ifdef niEMAC_STM32FX
+			__HAL_RCC_ETH_CLK_DISABLE();
+		#elif defined( STM32H5 )
+			__HAL_RCC_ETH_CLK_DISABLE();
+			__HAL_RCC_ETHTX_CLK_DISABLE();
+			__HAL_RCC_ETHRX_CLK_DISABLE();
+		#elif defined( STM32H7)
+			__HAL_RCC_ETH1MAC_CLK_DISABLE();
+			__HAL_RCC_ETH1TX_CLK_DISABLE();
+			__HAL_RCC_ETH1RX_CLK_DISABLE();
+		#endif
+
+		/**ETH GPIO Configuration
+		Common Pins
+		ETH_MDC ----------------------> ETH_MDC_Port, ETH_MDC_Pin
+		ETH_MDIO --------------------->
+		ETH_RXD0 --------------------->
+		ETH_RXD1 --------------------->
+		ETH_TX_EN -------------------->
+		ETH_TXD0 --------------------->
+		ETH_TXD1 --------------------->
+
+		RMII Specific Pins
+		ETH_REF_CLK ------------------>
+		ETH_CRS_DV ------------------->
+
+		MII Specific Pins
+		ETH_RX_CLK ------------------->
+		ETH_RX_ER -------------------->
+		ETH_RX_DV -------------------->
+		ETH_RXD2 --------------------->
+		ETH_RXD3 --------------------->
+		ETH_TX_CLK ------------------->
+		ETH_TXD2 --------------------->
+		ETH_TXD3 --------------------->
+		ETH_CRS ---------------------->
+		ETH_COL ---------------------->
+		*/
+
+		HAL_GPIO_DeInit( ETH_MDC_Port, ETH_MDC_Pin );
+		HAL_GPIO_DeInit( ETH_MDIO_Port, ETH_MDIO_Pin );
+		HAL_GPIO_DeInit( ETH_RXD0_Port, ETH_RXD0_Pin );
+		HAL_GPIO_DeInit( ETH_RXD1_Port, ETH_RXD1_Pin );
+		HAL_GPIO_DeInit( ETH_TX_EN_Port, ETH_TX_EN_Pin );
+		HAL_GPIO_DeInit( ETH_TXD0_Port, ETH_TXD0_Pin );
+		HAL_GPIO_DeInit( ETH_TXD1_Port, ETH_TXD1_Pin );
+
+		if( pxEthHandle->Init.MediaInterface == HAL_ETH_RMII_MODE )
+		{
+			HAL_GPIO_DeInit( ETH_REF_CLK_Port, ETH_REF_CLK_Pin );
+			HAL_GPIO_DeInit( ETH_CRS_DV_Port, ETH_CRS_DV_Pin );
+		}
+		else if( pxEthHandle->Init.MediaInterface == HAL_ETH_MII_MODE )
+		{
+			HAL_GPIO_DeInit( ETH_RX_CLK_Port, ETH_RX_CLK_Pin );
+			HAL_GPIO_DeInit( ETH_RX_ER_Port, ETH_RX_ER_Pin );
+			HAL_GPIO_DeInit( ETH_RX_DV_Port, ETH_RX_DV_Pin );
+			HAL_GPIO_DeInit( ETH_RXD2_Port, ETH_RXD2_Pin );
+			HAL_GPIO_DeInit( ETH_RXD3_Port, ETH_RXD3_Pin );
+			HAL_GPIO_DeInit( ETH_TX_CLK_Port, ETH_TX_CLK_Pin );
+			HAL_GPIO_DeInit( ETH_TXD2_Port, ETH_TXD2_Pin );
+			HAL_GPIO_DeInit( ETH_TXD3_Port, ETH_TXD3_Pin );
+			HAL_GPIO_DeInit( ETH_COL_Port, ETH_COL_Pin );
+			HAL_GPIO_DeInit( ETH_CRS_Port, ETH_CRS_Pin );
+		}
+
+		/* ETH interrupt Deinit */
+		HAL_NVIC_DisableIRQ(ETH_IRQn);
+	}
+}
+
+/*---------------------------------------------------------------------------*/
 
 #if defined( __MPU_PRESENT ) && ( __MPU_PRESENT == 1U )
 
