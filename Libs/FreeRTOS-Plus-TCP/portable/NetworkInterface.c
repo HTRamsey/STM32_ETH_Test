@@ -261,6 +261,15 @@
 
 #endif
 
+#define INCR_RX_DESC_INDEX( inx, offset )\
+    do {\
+        ( inx ) += ( offset );\
+        if( ( inx ) >= ETH_RX_DESC_CNT )\
+        {\
+            ( inx ) = ( ( inx ) - ETH_RX_DESC_CNT );\
+        }\
+    } while( 0 )
+
 #define niEMAC_BUFS_PER_DESC 2U
 
 /* IEEE 802.3 CRC32 polynomial - 0x04C11DB7 */
@@ -398,7 +407,9 @@ static BaseType_t prvAcceptPacket( const NetworkBufferDescriptor_t * const pxDes
 NetworkInterface_t * pxSTM32_FillInterfaceDescriptor( BaseType_t xEMACIndex, NetworkInterface_t * pxInterface );
 
 /* Reimplemented HAL Functions */
+static BaseType_t prvHAL_ETH_Start_IT( ETH_HandleTypeDef * const pxEthHandle );
 static BaseType_t prvHAL_ETH_Stop_IT( ETH_HandleTypeDef * const pxEthHandle );
+static void prvETH_UpdateDescriptor( ETH_HandleTypeDef * const pxEthHandle );
 static void prvHAL_ETH_SetMDIOClockRange( ETH_TypeDef * const pxEthInstance );
 static void prvHAL_ETH_SetHashTable( ETH_TypeDef * const pxEthInstance );
 static BaseType_t prvHAL_ETH_ReadPHYRegister( ETH_TypeDef * const pxEthInstance, uint32_t ulPhyAddr, uint32_t ulPhyReg, uint32_t * pulRegValue );
@@ -552,14 +563,11 @@ static BaseType_t prvNetworkInterfaceInitialise( NetworkInterface_t * pxInterfac
             /* fallthrough */
 
         case eMacEthStart:
-            if( pxEthHandle->gState != HAL_ETH_STATE_STARTED )
-            {
-                if( HAL_ETH_Start_IT( pxEthHandle ) != HAL_OK )
-                {
-                    FreeRTOS_debug_printf( ( "prvNetworkInterfaceInitialise: eMacEthStart failed\n" ) );
-                    break;
-                }
-            }
+			if( prvHAL_ETH_Start_IT( pxEthHandle ) != pdPASS )
+			{
+				FreeRTOS_debug_printf( ( "prvNetworkInterfaceInitialise: eMacEthStart failed\n" ) );
+				break;
+			}
 
             xMacInitStatus = eMacInitComplete;
             /* fallthrough */
@@ -919,7 +927,7 @@ static portTASK_FUNCTION( prvEMACHandlerTask, pvParameters )
                 {
                     /* Recover from critical error */
                     ( void ) HAL_ETH_Init( pxEthHandle );
-                    ( void ) HAL_ETH_Start_IT( pxEthHandle );
+                    ( void ) prvHAL_ETH_Start_IT( pxEthHandle );
                     xResult = prvNetworkInterfaceInput( pxEthHandle, pxInterface );
                 }
             }
@@ -942,7 +950,7 @@ static portTASK_FUNCTION( prvEMACHandlerTask, pvParameters )
                     /* Link was down or critical error occurred */
                     if( prvMacUpdateConfig( pxEthHandle, pxPhyObject ) != pdFALSE )
                     {
-                        ( void ) HAL_ETH_Start_IT( pxEthHandle );
+                        ( void ) prvHAL_ETH_Start_IT( pxEthHandle );
                     }
                 }
             }
@@ -1067,13 +1075,13 @@ static BaseType_t prvEthConfigInit( ETH_HandleTypeDef * pxEthHandle, NetworkInte
         /* ipLOCAL_MAC_ADDRESS */
         pxEthHandle->Init.MACAddr = ( uint8_t * ) pxEndPoint->xMACAddress.ucBytes;
 
-        #if defined( niEMAC_STM32FX )
-            /* This function doesn't get called in Fxx driver */
-            prvHAL_ETH_SetMDIOClockRange( pxEthHandle->Instance );
-        #endif
-
         if( HAL_ETH_Init( pxEthHandle ) == HAL_OK )
         {
+			#if defined( niEMAC_STM32FX )
+				/* This function doesn't get called in Fxx driver */
+				prvHAL_ETH_SetMDIOClockRange( pxEthHandle->Instance );
+			#endif
+
             uint32_t ulReg = READ_REG( pxEthHandle->Instance->MACCR );
             #ifdef niEMAC_STM32FX
                 #if ipconfigIS_ENABLED( ipconfigDRIVER_INCLUDED_RX_IP_CHECKSUM )
@@ -2460,6 +2468,55 @@ NetworkInterface_t * pxSTM32_FillInterfaceDescriptor( BaseType_t xEMACIndex, Net
 /*===========================================================================*/
 /*---------------------------------------------------------------------------*/
 
+static BaseType_t prvHAL_ETH_Start_IT( ETH_HandleTypeDef * const pxEthHandle )
+{
+    BaseType_t xResult = pdFAIL;
+
+    if( pxEthHandle->gState == HAL_ETH_STATE_READY )
+    {
+        pxEthHandle->gState = HAL_ETH_STATE_BUSY;
+
+        pxEthHandle->RxDescList.ItMode = 1U;
+        #ifdef niEMAC_STM32FX
+            SET_BIT( pxEthHandle->Instance->MACIMR, ETH_MACIMR_TSTIM | ETH_MACIMR_PMTIM );
+            SET_BIT( pxEthHandle->Instance->MMCRIMR, ETH_MMCRIMR_RGUFM | ETH_MMCRIMR_RFAEM | ETH_MMCRIMR_RFCEM );
+            SET_BIT( pxEthHandle->Instance->MMCTIMR, ETH_MMCTIMR_TGFM | ETH_MMCTIMR_TGFMSCM | ETH_MMCTIMR_TGFSCM );
+        #elif defined( niEMAC_STM32HX )
+            SET_BIT( pxEthHandle->Instance->MMCRIMR, ETH_MMCRIMR_RXLPITRCIM | ETH_MMCRIMR_RXLPIUSCIM | ETH_MMCRIMR_RXUCGPIM | ETH_MMCRIMR_RXALGNERPIM | ETH_MMCRIMR_RXCRCERPIM );
+            SET_BIT( pxEthHandle->Instance->MMCTIMR, ETH_MMCTIMR_TXLPITRCIM | ETH_MMCTIMR_TXLPIUSCIM | ETH_MMCTIMR_TXGPKTIM | ETH_MMCTIMR_TXMCOLGPIM | ETH_MMCTIMR_TXSCOLGPIM );
+        #endif
+
+        pxEthHandle->RxDescList.RxBuildDescCnt = ETH_RX_DESC_CNT;
+
+        prvETH_UpdateDescriptor( pxEthHandle );
+
+        SET_BIT( pxEthHandle->Instance->MACCR, ETH_MACCR_TE | ETH_MACCR_RE );
+
+        #ifdef niEMAC_STM32FX
+            SET_BIT( pxEthHandle->Instance->DMAOMR, ETH_DMAOMR_FTF | ETH_DMAOMR_ST | ETH_DMAOMR_SR );
+            CLEAR_BIT( pxEthHandle->Instance->DMASR, ( ETH_DMASR_TPS | ETH_DMASR_RPS ) );
+            __HAL_ETH_DMA_ENABLE_IT( pxEthHandle, ( ETH_DMAIER_NISE | ETH_DMAIER_RIE | ETH_DMAIER_TIE | ETH_DMAIER_FBEIE | ETH_DMAIER_AISE | ETH_DMAIER_RBUIE ) );
+        #elif defined( niEMAC_STM32HX )
+            SET_BIT( pxEthHandle->Instance->MTLTQOMR, ETH_MTLTQOMR_FTQ );
+            SET_BIT( pxEthHandle->Instance->DMACTCR, ETH_DMACTCR_ST );
+            SET_BIT( pxEthHandle->Instance->DMACRCR, ETH_DMACRCR_SR );
+            CLEAR_BIT( pxEthHandle->Instance->DMACSR, ( ETH_DMACSR_TPS | ETH_DMACSR_RPS ) );
+            __HAL_ETH_DMA_ENABLE_IT( pxEthHandle, ( ETH_DMACIER_NIE | ETH_DMACIER_RIE | ETH_DMACIER_TIE | ETH_DMACIER_FBEE | ETH_DMACIER_AIE | ETH_DMACIER_RBUE ) );
+        #endif
+
+        pxEthHandle->gState = HAL_ETH_STATE_STARTED;
+    }
+
+    if( pxEthHandle->gState == HAL_ETH_STATE_STARTED )
+    {
+    	xResult = pdPASS;
+    }
+
+    return xResult;
+}
+
+/*---------------------------------------------------------------------------*/
+
 static BaseType_t prvHAL_ETH_Stop_IT( ETH_HandleTypeDef * const pxEthHandle )
 {
     BaseType_t xResult = pdFAIL;
@@ -2469,18 +2526,14 @@ static BaseType_t prvHAL_ETH_Stop_IT( ETH_HandleTypeDef * const pxEthHandle )
         pxEthHandle->gState = HAL_ETH_STATE_BUSY;
 
         #ifdef niEMAC_STM32FX
-            __HAL_ETH_DMA_DISABLE_IT( pxEthHandle, 
-                ( ETH_DMAIER_NISE | ETH_DMAIER_RIE | ETH_DMAIER_TIE | ETH_DMAIER_FBEIE | ETH_DMAIER_AISE | ETH_DMAIER_RBUIE )
-            );
+            __HAL_ETH_DMA_DISABLE_IT( pxEthHandle, ( ETH_DMAIER_NISE | ETH_DMAIER_RIE | ETH_DMAIER_TIE | ETH_DMAIER_FBEIE | ETH_DMAIER_AISE | ETH_DMAIER_RBUIE ) );
             CLEAR_BIT( pxEthHandle->Instance->DMAOMR, ETH_DMAOMR_ST );
             CLEAR_BIT( pxEthHandle->Instance->DMAOMR, ETH_DMAOMR_SR );
             CLEAR_BIT( pxEthHandle->Instance->MACCR, ETH_MACCR_RE );
             SET_BIT( pxEthHandle->Instance->DMAOMR, ETH_DMAOMR_FTF );
             CLEAR_BIT( pxEthHandle->Instance->MACCR, ETH_MACCR_TE );
         #elif defined( niEMAC_STM32HX )
-            __HAL_ETH_DMA_DISABLE_IT( pxEthHandle,
-                ( ETH_DMACIER_NIE | ETH_DMACIER_RIE | ETH_DMACIER_TIE | ETH_DMACIER_FBEE | ETH_DMACIER_AIE | ETH_DMACIER_RBUE )
-            );
+            __HAL_ETH_DMA_DISABLE_IT( pxEthHandle, ( ETH_DMACIER_NIE | ETH_DMACIER_RIE | ETH_DMACIER_TIE | ETH_DMACIER_FBEE | ETH_DMACIER_AIE | ETH_DMACIER_RBUE ) );
             CLEAR_BIT( pxEthHandle->Instance->DMACTCR, ETH_DMACTCR_ST );
             CLEAR_BIT( pxEthHandle->Instance->DMACRCR, ETH_DMACRCR_SR );
             CLEAR_BIT( pxEthHandle->Instance->MACCR, ETH_MACCR_RE );
@@ -2507,6 +2560,79 @@ static BaseType_t prvHAL_ETH_Stop_IT( ETH_HandleTypeDef * const pxEthHandle )
     }
 
     return xResult;
+}
+
+/*---------------------------------------------------------------------------*/
+
+static void prvETH_UpdateDescriptor( ETH_HandleTypeDef * const pxEthHandle )
+{
+    uint8_t allocStatus = 1U;
+    ETH_RxDescListTypeDef * pxRxDescList = &pxEthHandle->RxDescList;
+    uint32_t descidx = pxRxDescList->RxBuildDescIdx;
+    uint32_t desccount = pxRxDescList->RxBuildDescCnt;
+    ETH_DMADescTypeDef * dmarxdesc = ( ETH_DMADescTypeDef * ) pxRxDescList->RxDesc[ descidx ];
+
+    while( ( desccount > 0U ) && ( allocStatus != 0U ) )
+    {
+        if( READ_REG( dmarxdesc->BackupAddr0 ) == 0U )
+        {
+            uint8_t * buff = NULL;
+            HAL_ETH_RxAllocateCallback( &buff );
+            if( buff == NULL )
+            {
+                allocStatus = 0U;
+            }
+            else
+            {
+                WRITE_REG( dmarxdesc->BackupAddr0, ( uint32_t ) buff );
+                #ifdef niEMAC_STM32FX
+                    WRITE_REG( dmarxdesc->DESC2, ( uint32_t ) buff );
+                #elif defined( niEMAC_STM32HX )
+                    WRITE_REG( dmarxdesc->DESC0, ( uint32_t ) buff );
+                #endif
+            }
+        }
+
+        if( allocStatus != 0U )
+        {
+            if( pxRxDescList->ItMode == 0U )
+            {
+                #ifdef niEMAC_STM32FX
+                    WRITE_REG( dmarxdesc->DESC1, ETH_DMARXDESC_DIC | pxEthHandle->Init.RxBuffLen | ETH_DMARXDESC_RCH );
+                #elif defined( niEMAC_STM32HX )
+                    WRITE_REG( dmarxdesc->DESC3, ETH_DMARXNDESCRF_OWN | ETH_DMARXNDESCRF_BUF1V );
+                #endif
+            }
+            else
+            {
+                #ifdef niEMAC_STM32FX
+                    WRITE_REG( dmarxdesc->DESC1, pxEthHandle->Init.RxBuffLen | ETH_DMARXDESC_RCH );
+                #elif defined( niEMAC_STM32HX )
+                    WRITE_REG( dmarxdesc->DESC3, ETH_DMARXNDESCRF_OWN | ETH_DMARXNDESCRF_BUF1V | ETH_DMARXNDESCRF_IOC );
+                #endif
+            }
+
+            #ifdef niEMAC_STM32FX
+                /* __DMB(); */
+                SET_BIT( dmarxdesc->DESC0, ETH_DMARXDESC_OWN );
+            #endif
+
+            INCR_RX_DESC_INDEX( descidx, 1U );
+            dmarxdesc = ( ETH_DMADescTypeDef * ) pxRxDescList->RxDesc[ descidx ];
+            --desccount;
+        }
+    }
+
+    if( pxRxDescList->RxBuildDescCnt != desccount )
+    {
+        #ifdef niEMAC_STM32FX
+            CLEAR_REG( pxEthHandle->Instance->DMARPDR );
+        #elif defined( niEMAC_STM32HX )
+            CLEAR_REG( pxEthHandle->Instance->DMACRDTPR );
+        #endif
+        pxRxDescList->RxBuildDescIdx = descidx;
+        pxRxDescList->RxBuildDescCnt = desccount;
+    }
 }
 
 /*---------------------------------------------------------------------------*/
