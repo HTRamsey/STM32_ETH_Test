@@ -261,6 +261,15 @@
 
 #endif
 
+#define INCR_TX_DESC_INDEX( inx, offset )\
+    do {\
+        ( inx ) += ( offset );\
+        if( ( inx ) >= ETH_TX_DESC_CNT )\
+        {\
+            ( inx ) = ( ( inx ) - ETH_TX_DESC_CNT );\
+        }\
+    } while( 0 )
+
 #define INCR_RX_DESC_INDEX( inx, offset )\
     do {\
         ( inx ) += ( offset );\
@@ -409,6 +418,8 @@ NetworkInterface_t * pxSTM32_FillInterfaceDescriptor( BaseType_t xEMACIndex, Net
 /* Reimplemented HAL Functions */
 static BaseType_t prvHAL_ETH_Start_IT( ETH_HandleTypeDef * const pxEthHandle );
 static BaseType_t prvHAL_ETH_Stop_IT( ETH_HandleTypeDef * const pxEthHandle );
+static BaseType_t prvHAL_ETH_ReadData( ETH_HandleTypeDef * const pxEthHandle, void ** ppvBuff );
+static void prvHAL_ETH_ReleaseTxPacket( ETH_HandleTypeDef * const pxEthHandle );
 static void prvETH_UpdateDescriptor( ETH_HandleTypeDef * const pxEthHandle );
 static void prvHAL_ETH_SetMDIOClockRange( ETH_TypeDef * const pxEthInstance );
 static void prvHAL_ETH_SetHashTable( ETH_TypeDef * const pxEthInstance );
@@ -844,7 +855,7 @@ static BaseType_t prvNetworkInterfaceInput( ETH_HandleTypeDef * pxEthHandle, Net
     NetworkBufferDescriptor_t * pxCurDescriptor = NULL;
     if( ( xMacInitStatus == eMacInitComplete ) && ( pxEthHandle->gState == HAL_ETH_STATE_STARTED ) )
     {
-        while( HAL_ETH_ReadData( pxEthHandle, ( void ** ) &pxCurDescriptor ) == HAL_OK )
+        while( prvHAL_ETH_ReadData( pxEthHandle, ( void ** ) &pxCurDescriptor ) == pdPASS )
         {
             ++uxCount;
             if( pxCurDescriptor == NULL )
@@ -1720,7 +1731,7 @@ static void prvReleaseTxPacket( ETH_HandleTypeDef * pxEthHandle )
 {
     if( xSemaphoreTake( xTxMutex, pdMS_TO_TICKS( niEMAC_TX_MAX_BLOCK_TIME_MS ) ) != pdFALSE )
     {
-        ( void ) HAL_ETH_ReleaseTxPacket( pxEthHandle );
+        prvHAL_ETH_ReleaseTxPacket( pxEthHandle );
         ( void ) xSemaphoreGive( xTxMutex );
     }
     else
@@ -2560,6 +2571,132 @@ static BaseType_t prvHAL_ETH_Stop_IT( ETH_HandleTypeDef * const pxEthHandle )
     }
 
     return xResult;
+}
+
+/*---------------------------------------------------------------------------*/
+
+static BaseType_t prvHAL_ETH_ReadData( ETH_HandleTypeDef * const pxEthHandle, void ** ppvBuff )
+{
+    configASSERT( ppvBuff != NULL );
+    configASSERT( pxEthHandle->gState == HAL_ETH_STATE_STARTED );
+    
+    BaseType_t xResult = pdFAIL;
+
+    uint8_t rxdataready = 0U;
+    ETH_RxDescListTypeDef * const dmarxdesclist = &( pxEthHandle->RxDescList );
+    uint32_t descidx = dmarxdesclist->RxDescIdx;
+    ETH_DMADescTypeDef * dmarxdesc = ( ETH_DMADescTypeDef * ) dmarxdesclist->RxDesc[ descidx ];
+    const uint32_t desccntmax = ETH_RX_DESC_CNT - dmarxdesclist->RxBuildDescCnt;
+    uint32_t desccnt = 0U;
+
+    #ifdef niEMAC_STM32FX
+        while( ( READ_BIT( dmarxdesc->DESC0, ETH_DMARXDESC_OWN ) == 0U ) && ( desccnt < desccntmax ) && ( rxdataready == 0U ) )
+    #elif defined( niEMAC_STM32HX )
+        while( ( READ_BIT( dmarxdesc->DESC3, ETH_DMARXNDESCWBF_OWN ) == 0U ) && ( desccnt < desccntmax ) && ( rxdataready == 0U ) )
+    #endif
+    {
+        #ifdef niEMAC_STM32FX
+            const BaseType_t xFirstDescriptor = ( READ_BIT( dmarxdesc->DESC0, ETH_DMARXDESC_FS ) != 0U );
+        #elif defined( niEMAC_STM32HX )
+            const BaseType_t xFirstDescriptor = ( READ_BIT( dmarxdesc->DESC3, ETH_DMARXNDESCWBF_FD ) != 0U );
+        #endif
+        if( ( xFirstDescriptor == pdTRUE ) || ( dmarxdesclist->pRxStart != NULL ) )
+        {
+            if( xFirstDescriptor == pdTRUE )
+            {
+                dmarxdesclist->RxDescCnt = 0;
+                dmarxdesclist->RxDataLength = 0;
+            }
+
+            uint32_t bufflength = pxEthHandle->Init.RxBuffLen;
+            #ifdef niEMAC_STM32FX
+                if( READ_BIT( dmarxdesc->DESC0, ETH_DMARXDESC_LS ) != 0U )
+                {
+                    bufflength = ( READ_BIT( dmarxdesc->DESC0, ETH_DMARXDESC_FL ) >> 16U ) - 4U;
+                    dmarxdesclist->pRxLastRxDesc = dmarxdesc->DESC0;
+                    rxdataready = 1;
+                }
+            #elif defined( niEMAC_STM32HX )
+                if( READ_BIT( dmarxdesc->DESC3, ETH_DMARXNDESCWBF_LD ) != 0U )
+                {
+                    bufflength = READ_BIT( dmarxdesc->DESC3, ETH_DMARXNDESCWBF_PL ) - dmarxdesclist->RxDataLength;
+                    dmarxdesclist->pRxLastRxDesc = dmarxdesc->DESC3;
+                    rxdataready = 1;
+                }
+            #endif
+
+            #ifdef niEMAC_STM32FX
+                WRITE_REG( dmarxdesc->BackupAddr0, dmarxdesc->DESC2 );
+            #endif
+            HAL_ETH_RxLinkCallback( &dmarxdesclist->pRxStart, &dmarxdesclist->pRxEnd, ( uint8_t * ) dmarxdesc->BackupAddr0, ( uint16_t ) bufflength );
+            ++( dmarxdesclist->RxDescCnt );
+            dmarxdesclist->RxDataLength += bufflength;
+
+            dmarxdesc->BackupAddr0 = 0;
+        }
+
+        INCR_RX_DESC_INDEX( descidx, 1U );
+        dmarxdesc = ( ETH_DMADescTypeDef * ) dmarxdesclist->RxDesc[ descidx ];
+        ++desccnt;
+    }
+
+    dmarxdesclist->RxBuildDescCnt += desccnt;
+    if( dmarxdesclist->RxBuildDescCnt != 0U )
+    {
+        prvETH_UpdateDescriptor( pxEthHandle );
+    }
+
+    dmarxdesclist->RxDescIdx = descidx;
+
+    if( rxdataready == 1U )
+    {
+        *ppvBuff = dmarxdesclist->pRxStart;
+        dmarxdesclist->pRxStart = NULL;
+        xResult = pdPASS;
+    }
+
+    return xResult;
+}
+
+/*---------------------------------------------------------------------------*/
+
+static void prvHAL_ETH_ReleaseTxPacket( ETH_HandleTypeDef * const pxEthHandle )
+{
+    ETH_TxDescListTypeDef * const dmatxdesclist = &( pxEthHandle->TxDescList );
+    uint32_t numOfBuf = dmatxdesclist->BuffersInUse;
+    uint32_t idx = dmatxdesclist->releaseIndex;
+    uint8_t pktTxStatus = 1U;
+
+    while( ( numOfBuf != 0U ) && ( pktTxStatus != 0U ) )
+    {
+        uint8_t pktInUse = 1U;
+        --numOfBuf;
+        if( dmatxdesclist->PacketAddress[ idx ] == NULL )
+        {
+            idx = ( idx + 1U ) & ( ETH_TX_DESC_CNT - 1U );
+            pktInUse = 0U;
+        }
+
+        if( pktInUse != 0U )
+        {
+            #ifdef niEMAC_STM32FX
+                if( ( pxEthHandle->Init.TxDesc[ idx ].DESC0 & ETH_DMATXDESC_OWN ) == 0U )
+            #elif defined( niEMAC_STM32HX )
+                 if( ( pxEthHandle->Init.TxDesc[ idx ].DESC3 & ETH_DMATXNDESCRF_OWN ) == 0U )
+            #endif
+            {
+                HAL_ETH_TxFreeCallback( dmatxdesclist->PacketAddress[ idx ] );
+                dmatxdesclist->PacketAddress[ idx ] = NULL;
+                idx = ( idx + 1U ) & ( ETH_TX_DESC_CNT - 1U );
+                dmatxdesclist->BuffersInUse = numOfBuf;
+                dmatxdesclist->releaseIndex = idx;
+            }
+            else
+            {
+                pktTxStatus = 0U;
+            }
+        }
+    }
 }
 
 /*---------------------------------------------------------------------------*/
