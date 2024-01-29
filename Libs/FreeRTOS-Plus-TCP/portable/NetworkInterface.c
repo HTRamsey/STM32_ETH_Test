@@ -93,26 +93,18 @@
     #define niEMAC_STM32HX
 #endif
 
+#define niEMAC_TASK_NAME        "EMAC_STM32"
+#define niEMAC_TASK_PRIORITY    ( configMAX_PRIORITIES - 1 )
+#define niEMAC_TASK_STACK_SIZE  ( 4U * configMINIMAL_STACK_SIZE )
+
 #define niEMAC_TX_DESC_SECTION    ".TxDescripSection"
 #define niEMAC_RX_DESC_SECTION    ".RxDescripSection"
 #define niEMAC_BUFFERS_SECTION    ".EthBuffersSection"
-
-#define niEMAC_DATA_ALIGNMENT        4U
-#define niEMAC_DATA_ALIGNMENT_MASK   ( niEMAC_DATA_ALIGNMENT - 1U )
-#define niEMAC_BUF_ALIGNMENT        32U
-#define niEMAC_BUF_ALIGNMENT_MASK   ( niEMAC_BUF_ALIGNMENT - 1U )
-
-#define niEMAC_DATA_BUFFER_SIZE     ( ( ipTOTAL_ETHERNET_FRAME_SIZE + niEMAC_DATA_ALIGNMENT_MASK ) & ~niEMAC_DATA_ALIGNMENT_MASK )
-#define niEMAC_TOTAL_BUFFER_SIZE    ( ( ( niEMAC_DATA_BUFFER_SIZE + ipBUFFER_PADDING ) + niEMAC_BUF_ALIGNMENT_MASK ) & ~niEMAC_BUF_ALIGNMENT_MASK )
 
 #define niEMAC_TASK_MAX_BLOCK_TIME_MS   100U
 #define niEMAC_TX_MAX_BLOCK_TIME_MS     20U
 #define niEMAC_RX_MAX_BLOCK_TIME_MS     20U
 #define niEMAC_DESCRIPTOR_WAIT_TIME_MS  20U
-
-#define niEMAC_TASK_NAME        "EMAC_STM32"
-#define niEMAC_TASK_PRIORITY    ( configMAX_PRIORITIES - 1 )
-#define niEMAC_TASK_STACK_SIZE  ( 4U * configMINIMAL_STACK_SIZE )
 
 #define niEMAC_TX_MUTEX_NAME    "EMAC_TxMutex"
 #define niEMAC_TX_DESC_SEM_NAME "EMAC_TxDescSem"
@@ -120,17 +112,18 @@
 #define niEMAC_AUTO_NEGOTIATION ipconfigENABLE
 #define niEMAC_USE_100MB        ( ipconfigENABLE && ipconfigIS_DISABLED( niEMAC_AUTO_NEGOTIATION ) )
 #define niEMAC_USE_FULL_DUPLEX  ( ipconfigENABLE && ipconfigIS_DISABLED( niEMAC_AUTO_NEGOTIATION ) )
-
 #define niEMAC_AUTO_CROSS       ( ipconfigENABLE && ipconfigIS_ENABLED( niEMAC_AUTO_NEGOTIATION ) )
 #define niEMAC_CROSSED_LINK     ( ipconfigENABLE && ipconfigIS_DISABLED( niEMAC_AUTO_CROSS ) )
 
 #define niEMAC_USE_RMII ipconfigENABLE
 
+#define niEMAC_USE_MPU ipconfigENABLE
+
 #ifdef niEMAC_STM32HX
-    /* #define niEMAC_AUTO_LOW_POWER   ( ipconfigDISABLE && ipconfigIS_DISABLED( niEMAC_USE_RMII ) ) */
-    #define niEMAC_TCP_SEGMENTATION ipconfigDISABLE
-    #define niEMAC_ARP_OFFLOAD      ipconfigDISABLE
-    #define niEMAC_USE_PHY_INT      ipconfigDISABLE
+	#define niEMAC_AUTO_LOW_POWER   ( ipconfigDISABLE && ipconfigIS_DISABLED( niEMAC_USE_RMII ) )
+	#define niEMAC_TCP_SEGMENTATION ipconfigDISABLE
+	#define niEMAC_ARP_OFFLOAD      ipconfigDISABLE
+	#define niEMAC_USE_PHY_INT      ipconfigDISABLE
 #endif
 
 #define niEMAC_DEBUG_ERROR ipconfigDISABLE
@@ -209,6 +202,31 @@
 /*===========================================================================*/
 /*---------------------------------------------------------------------------*/
 
+#define niEMAC_MPU ( defined( __MPU_PRESENT ) && ( __MPU_PRESENT == 1U ) )
+#if ( niEMAC_MPU != 0 )
+    #define niEMAC_MPU_ENABLED      ( _FLD2VAL( MPU_CTRL_ENABLE, MPU->CTRL ) != 0 )
+#endif
+
+#define niEMAC_CACHEABLE ( defined( __DCACHE_PRESENT ) && ( __DCACHE_PRESENT == 1U ) )
+#if ( niEMAC_CACHEABLE != 0 )
+    #define niEMAC_CACHE_ENABLED    ( _FLD2VAL( SCB_CCR_DC, SCB->CCR ) != 0 )
+    #define niEMAC_CACHE_MAINTENANCE ( niEMAC_CACHE_ENABLED && ipconfigIS_DISABLED( niEMAC_USE_MPU ) )
+    #ifdef __SCB_DCACHE_LINE_SIZE
+        #define niEMAC_DATA_ALIGNMENT    __SCB_DCACHE_LINE_SIZE
+    #else
+        #define niEMAC_DATA_ALIGNMENT    32U
+    #endif
+#else
+    #define niEMAC_DATA_ALIGNMENT   4U
+#endif
+
+#define niEMAC_DATA_ALIGNMENT_MASK   ( niEMAC_DATA_ALIGNMENT - 1U )
+#define niEMAC_BUF_ALIGNMENT        32U
+#define niEMAC_BUF_ALIGNMENT_MASK   ( niEMAC_BUF_ALIGNMENT - 1U )
+
+#define niEMAC_DATA_BUFFER_SIZE     ( ( ipTOTAL_ETHERNET_FRAME_SIZE + niEMAC_DATA_ALIGNMENT_MASK ) & ~niEMAC_DATA_ALIGNMENT_MASK )
+#define niEMAC_TOTAL_BUFFER_SIZE    ( ( ( niEMAC_DATA_BUFFER_SIZE + ipBUFFER_PADDING ) + niEMAC_BUF_ALIGNMENT_MASK ) & ~niEMAC_BUF_ALIGNMENT_MASK )
+
 #if defined( niEMAC_STM32FX )
 
 	#ifdef ETH_GIANT_PACKET
@@ -251,7 +269,7 @@
 #define niEMAC_MAC_IS_MULTICAST( MAC )  ( ( MAC[ 0 ] & 1U ) != 0 )
 #define niEMAC_MAC_IS_UNICAST( MAC )    ( ( MAC[ 0 ] & 1U ) == 0 )
 #define niEMAC_ADDRESS_HASH_BITS    64U
-#define niEMAC_MAC_SRC_MATCH_COUNT  3U
+#define niEMAC_MAC_MATCH_COUNT  3U
 
 /*---------------------------------------------------------------------------*/
 /*===========================================================================*/
@@ -285,16 +303,17 @@ typedef enum
 /* typedef struct xPhyData
 {
     EthernetPhy_t xPhyObject;
-    union {
-        lan8742_Object_t xLan8742a;
-        dp83848_Object_t xDp83848;
-    } xPhyInstance; 
-
+    #if defined( niEMAC_STM32HX ) && ipconfigIS_ENABLED( niEMAC_USE_PHY_INT )
+		union {
+			lan8742_Object_t xLan8742a;
+			dp83848_Object_t xDp83848;
+		} xPhyInstance;
+	#endif
 } PhyData_t;
 
 typedef struct xMacSrcMatchData
 {
-    uint8_t ucSrcMatchCounters[ niEMAC_MAC_SRC_MATCH_COUNT ];
+    uint8_t ucSrcMatchCounters[ niEMAC_MAC_MATCH_COUNT ];
     uint8_t uxMACEntryIndex = 0;
 } MacSrcMatchData_t;
 
@@ -313,6 +332,8 @@ typedef struct xMacFilteringData
 typedef struct xEMACData
 {
     ETH_HandleTypeDef xEthHandle;
+    ETH_DMADescTypeDef xDMADescTx[ ETH_TX_DESC_CNT ];
+    ETH_DMADescTypeDef xDMADescRx[ ETH_RX_DESC_CNT ];
     EthernetPhy_t xPhyObject;
     TaskHandle_t xEMACTaskHandle;
     SemaphoreHandle_t xTxMutex, xTxDescSem;
@@ -378,6 +399,7 @@ static BaseType_t prvAcceptPacket( const NetworkBufferDescriptor_t * const pxDes
 NetworkInterface_t * pxSTM32_FillInterfaceDescriptor( BaseType_t xEMACIndex, NetworkInterface_t * pxInterface );
 
 /* Reimplemented HAL Functions */
+static void prvHAL_ETH_SetMDIOClockRange( ETH_TypeDef * const pxEthInstance );
 static void prvHAL_ETH_SetHashTable( ETH_TypeDef * const pxEthInstance );
 static BaseType_t prvHAL_ETH_ReadPHYRegister( ETH_TypeDef * const pxEthInstance, uint32_t ulPhyAddr, uint32_t ulPhyReg, uint32_t * pulRegValue );
 static BaseType_t prvHAL_ETH_WritePHYRegister( ETH_TypeDef * const pxEthInstance, uint32_t ulPhyAddr, uint32_t ulPhyReg, uint32_t ulRegValue );
@@ -414,7 +436,7 @@ static BaseType_t xSwitchRequired = pdFALSE;
 static eMAC_INIT_STATUS_TYPE xMacInitStatus = eMacEthInit;
 
 /* Src Mac Matching */
-static uint8_t ucSrcMatchCounters[ niEMAC_MAC_SRC_MATCH_COUNT ] = { 0U };
+static uint8_t ucSrcMatchCounters[ niEMAC_MAC_MATCH_COUNT ] = { 0U };
 static uint8_t uxMACEntryIndex = 0;
 
 /* Src Mac Hashing */
@@ -724,6 +746,17 @@ static BaseType_t prvNetworkInterfaceOutput( NetworkInterface_t * pxInterface, N
             break;
         }
 
+        #if defined( niEMAC_CACHEABLE )
+            if( niEMAC_CACHE_MAINTENANCE )
+            {
+                const uintptr_t uxDataStart = ( uintptr_t ) xTxBuffer.buffer;
+                const uintptr_t uxLineStart = uxDataStart & ~niEMAC_DATA_ALIGNMENT_MASK;
+                const ptrdiff_t uxDataOffset = uxDataStart - uxLineStart;
+                const size_t uxLength = xTxBuffer.len + uxDataOffset;
+                SCB_CleanDCache_by_Addr( ( uint32_t * ) uxLineStart, uxLength );
+            }
+        #endif
+
         if( HAL_ETH_Transmit_IT( pxEthHandle, &xTxConfig ) == HAL_OK )
         {
             /* Released later in deferred task by calling HAL_ETH_ReleaseTxPacket */
@@ -1011,7 +1044,7 @@ static BaseType_t prvEthConfigInit( ETH_HandleTypeDef * pxEthHandle, NetworkInte
     pxEthHandle->Init.MediaInterface = ipconfigIS_ENABLED( niEMAC_USE_RMII ) ? HAL_ETH_RMII_MODE : HAL_ETH_MII_MODE;
 
     pxEthHandle->Init.RxBuffLen = niEMAC_DATA_BUFFER_SIZE;
-    configASSERT( pxEthHandle->Init.RxBuffLen <= ETH_MAX_PACKET_SIZE );
+    /* configASSERT( pxEthHandle->Init.RxBuffLen <= ETH_MAX_PACKET_SIZE ); */
     configASSERT( pxEthHandle->Init.RxBuffLen % 4U == 0 );
     #if ( defined( niEMAC_STM32FX ) && defined( ETH_RX_BUF_SIZE ) )
         configASSERT( pxEthHandle->Init.RxBuffLen == ETH_RX_BUF_SIZE );
@@ -1036,38 +1069,56 @@ static BaseType_t prvEthConfigInit( ETH_HandleTypeDef * pxEthHandle, NetworkInte
 
         #if defined( niEMAC_STM32FX )
             /* This function doesn't get called in Fxx driver */
-            HAL_ETH_SetMDIOClockRange( pxEthHandle );
+            prvHAL_ETH_SetMDIOClockRange( pxEthHandle->Instance );
         #endif
 
         if( HAL_ETH_Init( pxEthHandle ) == HAL_OK )
         {
-            ETH_MACConfigTypeDef xMACConfig;
-            ( void ) HAL_ETH_GetMACConfig( pxEthHandle , &xMACConfig );
-            xMACConfig.ChecksumOffload = ( FunctionalState ) ipconfigIS_ENABLED( ipconfigDRIVER_INCLUDED_RX_IP_CHECKSUM );
-            xMACConfig.CRCStripTypePacket = DISABLE;
-            xMACConfig.AutomaticPadCRCStrip = ENABLE;
-            xMACConfig.RetryTransmission = ENABLE;
-            ( void ) HAL_ETH_SetMACConfig( pxEthHandle, &xMACConfig );
-
-            ETH_DMAConfigTypeDef xDMAConfig;
-            ( void ) HAL_ETH_GetDMAConfig( pxEthHandle, &xDMAConfig );
-            #if defined( niEMAC_STM32FX )
-                xDMAConfig.EnhancedDescriptorFormat = ( FunctionalState ) ( ipconfigIS_ENABLED( ipconfigDRIVER_INCLUDED_RX_IP_CHECKSUM ) || ipconfigIS_ENABLED( ipconfigDRIVER_INCLUDED_TX_IP_CHECKSUM ) );
+            uint32_t ulReg = pxEthHandle->Instance->MACCR;
+            #ifdef niEMAC_STM32FX
+                #if ipconfigIS_ENABLED( ipconfigDRIVER_INCLUDED_RX_IP_CHECKSUM )
+                    ulReg |= ETH_MACCR_IPCO;
+                #else
+                    ulReg &= ~ETH_MACCR_IPCO;
+                #endif
+                #ifdef ETH_MACCR_CSTF
+                    ulReg &= ~ETH_MACCR_CSTF;
+                #endif
+                ulReg |= ETH_MACCR_APCS;
+                ulReg &= ~ETH_MACCR_RD;
             #elif defined( niEMAC_STM32HX )
-                xDMAConfig.SecondPacketOperate = ENABLE;
+                #if ipconfigIS_ENABLED( ipconfigDRIVER_INCLUDED_RX_IP_CHECKSUM )
+                    ulReg |= ETH_MACCR_IPC;
+                #else
+                    ulReg &= ~ETH_MACCR_IPC;
+                #endif
+                ulReg &= ~ETH_MACCR_CST;
+                ulReg |= ETH_MACCR_ACS;
+                ulReg &= ~ETH_MACCR_DR;
+            #endif
+            pxEthHandle->Instance->MACCR = ulReg;
+
+            #if defined( niEMAC_STM32FX )
+                #if ipconfigIS_ENABLED( ipconfigDRIVER_INCLUDED_RX_IP_CHECKSUM ) || ipconfigIS_ENABLED( ipconfigDRIVER_INCLUDED_TX_IP_CHECKSUM )
+                    pxEthHandle->Instance->DMABMR |= ETH_DMABMR_EDE;
+                #else
+                    pxEthHandle->Instance->DMABMR &= ~ETH_DMABMR_EDE;
+                #endif
+                pxEthHandle->Instance->DMAOMR |= ETH_DMAOMR_OSF;
+            #elif defined( niEMAC_STM32HX )
+                pxEthHandle->Instance->DMACTCR |= ETH_DMACTCR_OSP;
                 /* #if ipconfigIS_ENABLED( ipconfigUSE_TCP ) && ipconfigIS_ENABLED( niEMAC_TCP_SEGMENTATION )
-                    xDMAConfig.TCPSegmentation = ENABLE;
-                    xDMAConfig.MaximumSegmentSize = ipconfigTCP_MSS;
+                    pxEthHandle->Instance->DMACTCR |= ETH_DMACTCR_TSE;
+                    MODIFY_REG( pxEthHandle->Instance->DMACCR, ETH_DMACCR_MSS, ipconfigTCP_MSS );
                 #endif */
             #endif
-            ( void ) HAL_ETH_SetDMAConfig( pxEthHandle, &xDMAConfig );
 
             #if defined( niEMAC_STM32HX )
                 prvInitPacketFilter( pxEthHandle, pxInterface );
 
-                /* HAL_ETHEx_DisableARPOffload( pxEthHandle );
-                HAL_ETHEx_SetARPAddressMatch( pxEthHandle, ulSourceIPAddress );
-                HAL_ETHEx_EnableARPOffload( pxEthHandle ); */
+                /* pxEthHandle->Instance->MACCR &= ~ETH_MACCR_ARP;
+                WRITE_REG( pxEthHandle->Instance->MACARPAR, ulSourceIPAddress );
+                pxEthHandle->Instance->MACCR |= ETH_MACCR_ARP; */
             #endif
 
             prvInitMacAddresses( pxEthHandle, pxInterface );
@@ -1078,14 +1129,15 @@ static BaseType_t prvEthConfigInit( ETH_HandleTypeDef * pxEthHandle, NetworkInte
 
     if( xResult == pdTRUE )
     {
-        #if defined( __DCACHE_PRESENT ) && ( __DCACHE_PRESENT == 1U )
-            if( _FLD2VAL( SCB_CCR_DC, SCB->CCR ) != 0 )
+        #if ( niEMAC_CACHEABLE != 0 )
+            if( niEMAC_CACHE_ENABLED )
             {
-                #if defined( __MPU_PRESENT ) && ( __MPU_PRESENT == 1U )
+                #if ( niEMAC_MPU != 0 )
                     configASSERT( _FLD2VAL( MPU_CTRL_ENABLE, MPU->CTRL ) != 0 );
                 #else
                     configASSERT( pdFALSE );
                 #endif
+                /* _FLD2VAL( SCB_CCSIDR_LINESIZE, SCB->CCSIDR ) */
             }
         #endif
 
@@ -1128,7 +1180,40 @@ static BaseType_t prvEthConfigInit( ETH_HandleTypeDef * pxEthHandle, NetworkInte
 
 static void prvInitMacAddresses( ETH_HandleTypeDef * pxEthHandle, NetworkInterface_t * pxInterface )
 {
-    ETH_MACFilterConfigTypeDef xFilterConfig;
+    #ifdef niEMAC_STM32FX
+        uint32_t ulReg = pxEthHandle->Instance->MACFFR;
+        ulReg &= ~ETH_MACFFR_RA;
+        ulReg |= ETH_MACFFR_HPF;
+        ulReg &= ~ETH_MACFFR_SAF;
+        ulReg &= ~ETH_MACFFR_SAIF;
+        ulReg &= ~ETH_MACFFR_PCF;
+        ulReg |= ETH_MACFFR_PCF_BlockAll;
+        ulReg &= ~ETH_MACFFR_BFD;
+        ulReg &= ~ETH_MACFFR_PAM;
+        ulReg &= ~ETH_MACFFR_DAIF;
+        ulReg |= ETH_MACFFR_HM;
+        ulReg |= ETH_MACFFR_HU;
+        ulReg &= ~ETH_MACFFR_PM;
+        pxEthHandle->Instance->MACFFR = ulReg;
+    #elif defined( niEMAC_STM32HX )
+        uint32_t ulReg = pxEthHandle->Instance->MACPFR;
+        ulReg &= ~ETH_MACPFR_RA;
+        ulReg &= ~ETH_MACPFR_DNTU;
+        ulReg |= ETH_MACPFR_HPF;
+        ulReg &= ~ETH_MACPFR_SAF;
+        ulReg &= ~ETH_MACPFR_SAIF;
+        ulReg &= ~ETH_MACPFR_PCF;
+        ulReg |= ETH_MACPFR_PCF_BLOCKALL;
+        ulReg &= ~ETH_MACPFR_DBF;
+        ulReg &= ~ETH_MACPFR_PM;
+        ulReg &= ~ETH_MACPFR_DAIF;
+        ulReg |= ETH_MACPFR_HMC;
+        ulReg |= ETH_MACPFR_HUC;
+        ulReg &= ~ETH_MACPFR_PR;
+        pxEthHandle->Instance->MACPFR = ulReg;
+    #endif
+
+    /* ETH_MACFilterConfigTypeDef xFilterConfig;
     ( void ) HAL_ETH_GetMACFilterConfig( pxEthHandle, &xFilterConfig );
     xFilterConfig.ReceiveAllMode = DISABLE;
     xFilterConfig.HachOrPerfectFilter = ENABLE;
@@ -1141,7 +1226,7 @@ static void prvInitMacAddresses( ETH_HandleTypeDef * pxEthHandle, NetworkInterfa
     xFilterConfig.HashMulticast = ENABLE;
     xFilterConfig.HashUnicast = ENABLE;
     xFilterConfig.PromiscuousMode = DISABLE;
-    ( void ) HAL_ETH_SetMACFilterConfig( pxEthHandle, &xFilterConfig );
+    ( void ) HAL_ETH_SetMACFilterConfig( pxEthHandle, &xFilterConfig ); */
 
     NetworkEndPoint_t * pxEndPoint;
     for( pxEndPoint = FreeRTOS_FirstEndPoint( pxInterface ); pxEndPoint != NULL; pxEndPoint = FreeRTOS_NextEndPoint( pxInterface, pxEndPoint ) )
@@ -1175,30 +1260,27 @@ static void prvInitMacAddresses( ETH_HandleTypeDef * pxEthHandle, NetworkInterfa
 
 static void prvInitPacketFilter( ETH_HandleTypeDef * pxEthHandle, const NetworkInterface_t * const pxInterface )
 {
-    HAL_ETHEx_DisableL3L4Filtering( pxEthHandle );
+    pxEthHandle->Instance->MACPFR &= ~ETH_MACPFR_IPFE;
 
     #if ipconfigIS_ENABLED( ipconfigDRIVER_INCLUDED_RX_IP_CHECKSUM )
     {
         const uint8_t ucFilterCount = _FLD2VAL( ETH_MACHWF1R_L3L4FNUM, pxEthHandle->Instance->MACHWF1R );
         if( ucFilterCount > 0 )
         {
-            ETH_MACConfigTypeDef xMACConfig;
-            ( void ) HAL_ETH_GetMACConfig( pxEthHandle , &xMACConfig );
-            if( xMACConfig.ChecksumOffload != ENABLE )
+            /* "The Layer 3 and Layer 4 Packet Filter feature automatically selects the IPC Full Checksum
+             *  Offload Engine on the Receive side. When this feature is enabled, you must set the IPC bit." */
+            configASSERT( pxEthHandle->gState == HAL_ETH_STATE_READY );
+            if( ( pxEthHandle->Instance->MACCR & ETH_MACCR_IPC ) == 0 )
             {
-                /* "The Layer 3 and Layer 4 Packet Filter feature automatically selects the IPC Full Checksum
-                Offload Engine on the Receive side. When this feature is enabled, you must set the IPC bit." */
-                xMACConfig.ChecksumOffload = ENABLE;
-                ( void ) HAL_ETH_SetMACConfig( pxEthHandle , &xMACConfig );
+                pxEthHandle->Instance->MACCR |= ETH_MACCR_IPC;
             }
 
-            if( ipconfigIS_ENABLED( ipconfigETHERNET_DRIVER_FILTERS_FRAME_TYPES ) )
+            #if ipconfigIS_ENABLED( ipconfigETHERNET_DRIVER_FILTERS_FRAME_TYPES )
             {
                 ETH_L3FilterConfigTypeDef xL3FilterConfig;
 
                 /* Filter out all possibilities if frame type is disabled */
-                if( ipconfigIS_DISABLED( ipconfigUSE_IPv4 ) )
-                {
+                #if ipconfigIS_DISABLED( ipconfigUSE_IPv4 )
                     /* Block IPv4 if it is disabled */
                     ( void ) HAL_ETHEx_GetL3FilterConfig( pxEthHandle, ETH_L3_FILTER_0, &xL3FilterConfig );
                     xL3FilterConfig.Protocol = ETH_L3_IPV4_MATCH;
@@ -1209,10 +1291,9 @@ static void prvInitPacketFilter( ETH_HandleTypeDef * pxEthHandle, const NetworkI
                     xL3FilterConfig.Ip4SrcAddr = ipBROADCAST_IP_ADDRESS;
                     xL3FilterConfig.Ip4DestAddr = ipBROADCAST_IP_ADDRESS;
                     ( void ) HAL_ETHEx_SetL3FilterConfig( pxEthHandle, ETH_L3_FILTER_0, &xL3FilterConfig );
-                }
+                #endif /* if ipconfigIS_DISABLED( ipconfigUSE_IPv4 ) */
 
-                if( ipconfigIS_DISABLED( ipconfigUSE_IPv6 ) && ( ucFilterCount > 1 ) )
-                {
+                #if ipconfigIS_DISABLED( ipconfigUSE_IPv6 )
                     /* Block IPv6 if it is disabled */
                     ( void ) HAL_ETHEx_GetL3FilterConfig( pxEthHandle, ETH_L3_FILTER_1, &xL3FilterConfig );
                     xL3FilterConfig.Protocol = ETH_L3_IPV6_MATCH;
@@ -1225,13 +1306,12 @@ static void prvInitPacketFilter( ETH_HandleTypeDef * pxEthHandle, const NetworkI
                     xL3FilterConfig.Ip6Addr[ 2 ] = 0xFFFFFFFFU;
                     xL3FilterConfig.Ip6Addr[ 3 ] = 0xFFFFFFFFU;
                     ( void ) HAL_ETHEx_SetL3FilterConfig( pxEthHandle, ETH_L3_FILTER_1, &xL3FilterConfig );
-                }
+                #endif /* if ipconfigIS_DISABLED( ipconfigUSE_IPv6 ) */
 
                 for( NetworkEndPoint_t * pxEndPoint = FreeRTOS_FirstEndPoint( pxInterface ); pxEndPoint != NULL; pxEndPoint = FreeRTOS_NextEndPoint( pxInterface, pxEndPoint ) )
                 {
-                    if( ENDPOINT_IS_IPv4( pxEndPoint ) )
-                    {
-                        if( ipconfigIS_ENABLED( ipconfigUSE_IPv4 ) )
+                    #if ipconfigIS_ENABLED( ipconfigUSE_IPv4 )
+                        if( ENDPOINT_IS_IPv4( pxEndPoint ) )
                         {
                             ( void ) HAL_ETHEx_GetL3FilterConfig( pxEthHandle, ETH_L3_FILTER_0, &xL3FilterConfig );
                             xL3FilterConfig.Protocol = ETH_L3_IPV4_MATCH;
@@ -1243,10 +1323,9 @@ static void prvInitPacketFilter( ETH_HandleTypeDef * pxEthHandle, const NetworkI
                             xL3FilterConfig.Ip4DestAddr = pxEndPoint->ipv4_settings.ulIPAddress;
                             ( void ) HAL_ETHEx_SetL3FilterConfig( pxEthHandle, ETH_L3_FILTER_0, &xL3FilterConfig );
                         }
-                    }
-                    else if( ENDPOINT_IS_IPv6( pxEndPoint ) )
-                    {
-                        if( ipconfigIS_ENABLED( ipconfigUSE_IPv6 ) && ( ucFilterCount > 1 ) )
+                    #endif /* if ipconfigIS_ENABLED( ipconfigUSE_IPv4 ) */
+                    #if ipconfigIS_ENABLED( ipconfigUSE_IPv6 )
+                        if( ENDPOINT_IS_IPv6( pxEndPoint ) )
                         {
                             ( void ) HAL_ETHEx_GetL3FilterConfig( pxEthHandle, ETH_L3_FILTER_1, &xL3FilterConfig );
                             xL3FilterConfig.Protocol = ETH_L3_IPV6_MATCH;
@@ -1260,11 +1339,12 @@ static void prvInitPacketFilter( ETH_HandleTypeDef * pxEthHandle, const NetworkI
                             xL3FilterConfig.Ip6Addr[ 3 ] = 0xFFFFFFFFU;
                             ( void ) HAL_ETHEx_SetL3FilterConfig( pxEthHandle, ETH_L3_FILTER_1, &xL3FilterConfig );
                         }
-                    }
+                    #endif /* if ipconfigIS_ENABLED( ipconfigUSE_IPv6 ) */
                 }
-            } /* if ipconfigIS_ENABLED( ipconfigETHERNET_DRIVER_FILTERS_FRAME_TYPES ) */
+            }
+            #endif /* if ipconfigIS_ENABLED( ipconfigETHERNET_DRIVER_FILTERS_FRAME_TYPES ) */
 
-            if( ipconfigIS_ENABLED( ipconfigETHERNET_DRIVER_FILTERS_PACKETS ) )
+            #if ipconfigIS_ENABLED( ipconfigETHERNET_DRIVER_FILTERS_PACKETS )
             {
                 /* TODO: Let user to block certain port numbers */
                 /* TODO: Live updated in task based on active sockets? */
@@ -1279,8 +1359,7 @@ static void prvInitPacketFilter( ETH_HandleTypeDef * pxEthHandle, const NetworkI
                 xL4FilterConfig.DestinationPort = 0U;
                 ( void ) HAL_ETHEx_SetL4FilterConfig( pxEthHandle, ETH_L4_FILTER_0, &xL4FilterConfig );
 
-                if( ipconfigIS_DISABLED( ipconfigUSE_TCP ) )
-                {
+                #if ipconfigIS_DISABLED( ipconfigUSE_TCP )
                     /* Block TCP if it is disabled */
                     ( void ) HAL_ETHEx_GetL4FilterConfig( pxEthHandle, ETH_L4_FILTER_1, &xL4FilterConfig );
                     xL4FilterConfig.Protocol = ETH_L4_TCP_MATCH;
@@ -1289,10 +1368,11 @@ static void prvInitPacketFilter( ETH_HandleTypeDef * pxEthHandle, const NetworkI
                     xL4FilterConfig.SourcePort = 0xFFFFU;
                     xL4FilterConfig.DestinationPort = 0xFFFFU;
                     ( void ) HAL_ETHEx_SetL4FilterConfig( pxEthHandle, ETH_L4_FILTER_1, &xL4FilterConfig );
-                }
+                #endif /* if ipconfigIS_DISABLED( ipconfigUSE_TCP ) */
             }
+            #endif /* if ipconfigIS_ENABLED( ipconfigETHERNET_DRIVER_FILTERS_PACKETS ) */
 
-            HAL_ETHEx_EnableL3L4Filtering( pxEthHandle );
+            pxEthHandle->Instance->MACPFR |= ETH_MACPFR_IPFE;
         }
     }
     #endif /* if ipconfigIS_ENABLED( ipconfigDRIVER_INCLUDED_RX_IP_CHECKSUM ) */
@@ -1460,7 +1540,7 @@ static uint8_t prvGetMacHashIndex( const uint8_t * const pucMACAddr )
 /* Needed since HAL Driver only provides source matching */
 static void prvHAL_ETH_SetDestMACAddrMatch( ETH_TypeDef * const pxEthInstance, uint8_t ucIndex, const uint8_t * const pucMACAddr )
 {
-    configASSERT( ucIndex < niEMAC_MAC_SRC_MATCH_COUNT );
+    configASSERT( ucIndex < niEMAC_MAC_MATCH_COUNT );
     const uint32_t ulMacAddrHigh = ( pucMACAddr[ 5 ] << 8 ) | ( pucMACAddr[ 4 ] );
     const uint32_t ulMacAddrLow = ( pucMACAddr[ 3 ] << 24 ) | ( pucMACAddr[ 2 ] << 16 ) | ( pucMACAddr[ 1 ] << 8 ) | ( pucMACAddr[ 0 ] );
 
@@ -1475,7 +1555,7 @@ static void prvHAL_ETH_SetDestMACAddrMatch( ETH_TypeDef * const pxEthInstance, u
 
 static void prvHAL_ETH_ClearDestMACAddrMatch( ETH_TypeDef * const pxEthInstance, uint8_t ucIndex )
 {
-    configASSERT( ucIndex < niEMAC_MAC_SRC_MATCH_COUNT );
+    configASSERT( ucIndex < niEMAC_MAC_MATCH_COUNT );
     const uint32_t ulMacRegHigh = ( ( uint32_t ) &( pxEthInstance->MACA1HR ) + ( 8 * ucIndex ) );
     const uint32_t ulMacRegLow = ( ( uint32_t ) &( pxEthInstance->MACA1LR ) + ( 8 * ucIndex ) );
     ( * ( __IO uint32_t * ) ulMacRegHigh ) = 0U;
@@ -1489,7 +1569,7 @@ static BaseType_t prvAddDestMACAddrMatch( ETH_TypeDef * const pxEthInstance, con
     BaseType_t xResult = pdFALSE;
 
     uint8_t ucIndex;
-    for( ucIndex = 0; ucIndex < niEMAC_MAC_SRC_MATCH_COUNT; ++ucIndex )
+    for( ucIndex = 0; ucIndex < niEMAC_MAC_MATCH_COUNT; ++ucIndex )
     {
         if( ucSrcMatchCounters[ ucIndex ] > 0U )
         {
@@ -1510,9 +1590,9 @@ static BaseType_t prvAddDestMACAddrMatch( ETH_TypeDef * const pxEthInstance, con
                 break;
             }
         }
-        else if( uxMACEntryIndex > niEMAC_MAC_SRC_MATCH_COUNT )
+        else if( uxMACEntryIndex > niEMAC_MAC_MATCH_COUNT )
         {
-            uxMACEntryIndex = niEMAC_MAC_SRC_MATCH_COUNT;
+            uxMACEntryIndex = niEMAC_MAC_MATCH_COUNT;
         }
     }
 
@@ -1526,7 +1606,7 @@ static BaseType_t prvRemoveDestMACAddrMatch( ETH_TypeDef * const pxEthInstance, 
     BaseType_t xResult = pdFALSE;
 
     uint8_t ucIndex;
-    for( ucIndex = 0; ucIndex < niEMAC_MAC_SRC_MATCH_COUNT; ++ucIndex )
+    for( ucIndex = 0; ucIndex < niEMAC_MAC_MATCH_COUNT; ++ucIndex )
     {
         if( ucSrcMatchCounters[ ucIndex ] > 0U )
         {
@@ -1562,7 +1642,7 @@ static BaseType_t prvSetNewDestMACAddrMatch( ETH_TypeDef * const pxEthInstance, 
 {
     BaseType_t xResult = pdFALSE;
 
-    if( uxMACEntryIndex < niEMAC_MAC_SRC_MATCH_COUNT )
+    if( uxMACEntryIndex < niEMAC_MAC_MATCH_COUNT )
     {
         if( ucAddrHashCounters[ ucHashIndex ] == 0U )
         {
@@ -1662,20 +1742,28 @@ static BaseType_t prvMacUpdateConfig( ETH_HandleTypeDef * pxEthHandle, EthernetP
         ( void ) HAL_ETH_Stop_IT( pxEthHandle );
     }
 
-    ETH_MACConfigTypeDef xMACConfig;
-    ( void ) HAL_ETH_GetMACConfig( pxEthHandle , &xMACConfig );
-
     #if ipconfigIS_ENABLED( niEMAC_AUTO_NEGOTIATION )
         ( void ) xPhyStartAutoNegotiation( pxPhyObject, xPhyGetMask( pxPhyObject ) );
     #else
         ( void ) xPhyFixedValue( pxPhyObject, xPhyGetMask( pxPhyObject ) );
     #endif
-    xMACConfig.DuplexMode = ( pxPhyObject->xPhyProperties.ucDuplex == PHY_DUPLEX_FULL ) ? ETH_FULLDUPLEX_MODE : ETH_HALFDUPLEX_MODE;
-    xMACConfig.Speed = ( pxPhyObject->xPhyProperties.ucSpeed == PHY_SPEED_10 ) ? ETH_SPEED_10M : ETH_SPEED_100M;
 
-    if( HAL_ETH_SetMACConfig( pxEthHandle, &xMACConfig ) == HAL_OK )
+    if( pxPhyObject->xPhyProperties.ucDuplex == PHY_DUPLEX_FULL )
     {
-        xResult = pdTRUE;
+        pxEthHandle->Instance->MACCR |= ETH_MACCR_DM;
+    }
+    else
+    {
+        pxEthHandle->Instance->MACCR &= ~ETH_MACCR_DM;
+    }
+
+    if( pxPhyObject->xPhyProperties.ucSpeed == PHY_SPEED_100 )
+    {
+        pxEthHandle->Instance->MACCR |= ETH_MACCR_FES;
+    }
+    else
+    {
+        pxEthHandle->Instance->MACCR &= ~ETH_MACCR_FES;
     }
 
     /* #if ipconfigIS_ENABLED( niEMAC_AUTO_LOW_POWER )
@@ -1976,11 +2064,11 @@ void HAL_ETH_TxCpltCallback( ETH_HandleTypeDef * pxEthHandle )
 
 /*---------------------------------------------------------------------------*/
 
-#ifdef niEMAC_STM32HX
+#if defined( niEMAC_STM32HX ) && ipconfigIS_ENABLED( niEMAC_AUTO_LOW_POWER )
 
 void HAL_ETH_EEECallback( ETH_HandleTypeDef * pxEthHandle )
 {
-    switch( HAL_ETHEx_GetMACLPIEvent( pxEthHandle ) )
+    switch( pxEthHandle->MACLPIEvent )
     {
         case ETH_TX_LPI_ENTRY:
         case ETH_TX_LPI_EXIT:
@@ -1993,7 +2081,7 @@ void HAL_ETH_EEECallback( ETH_HandleTypeDef * pxEthHandle )
     }
 }
 
-#endif
+#endif /* if defined( niEMAC_STM32HX ) && ipconfigIS_ENABLED( niEMAC_AUTO_LOW_POWER ) */
 
 /*---------------------------------------------------------------------------*/
 /*===========================================================================*/
@@ -2006,6 +2094,12 @@ void HAL_ETH_RxAllocateCallback( uint8_t ** ppucBuff )
     const NetworkBufferDescriptor_t * pxBufferDescriptor = pxGetNetworkBufferWithDescriptor( niEMAC_DATA_BUFFER_SIZE, pdMS_TO_TICKS( niEMAC_DESCRIPTOR_WAIT_TIME_MS ) );
     if( pxBufferDescriptor != NULL )
     {
+        #ifdef niEMAC_CACHEABLE
+            if( niEMAC_CACHE_MAINTENANCE )
+            {
+                SCB_InvalidateDCache_by_Addr( ( uint32_t * ) pxBufferDescriptor->pucEthernetBuffer, pxBufferDescriptor->xDataLength );
+            }
+        #endif
         *ppucBuff = pxBufferDescriptor->pucEthernetBuffer;
     }
     else
@@ -2040,6 +2134,12 @@ void HAL_ETH_RxLinkCallback( void ** ppvStart, void ** ppvEnd, uint8_t * pucBuff
         *ppxEndDescriptor = pxCurDescriptor;
         /* Only single buffer packets are supported */
         configASSERT( *ppxStartDescriptor == *ppxEndDescriptor );
+        #ifdef niEMAC_CACHEABLE
+            if( niEMAC_CACHE_MAINTENANCE )
+            {
+                SCB_InvalidateDCache_by_Addr( ( uint32_t * ) pucBuff, usLength );
+            }
+        #endif
     }
     else
     {
@@ -2123,6 +2223,60 @@ NetworkInterface_t * pxSTM32_FillInterfaceDescriptor( BaseType_t xEMACIndex, Net
 /*===========================================================================*/
 /*                        Reimplemented HAL Functions                        */
 /*===========================================================================*/
+/*---------------------------------------------------------------------------*/
+
+static void prvHAL_ETH_SetMDIOClockRange( ETH_TypeDef * const pxEthInstance )
+{
+    const uint32_t ulHClk = HAL_RCC_GetHCLKFreq();
+
+    if( ( ulHClk >= 20000000U ) && ( ulHClk < 35000000U ) )
+    {
+        #ifdef niEMAC_STM32FX
+            MODIFY_REG( pxEthInstance->MACMIIAR, ETH_MACMIIAR_CR, ETH_MACMIIAR_CR_Div16 );
+        #elif defined( niEMAC_STM32HX )
+            MODIFY_REG( pxEthInstance->MACMDIOAR, ETH_MACMDIOAR_CR, ETH_MACMDIOAR_CR_DIV16 );
+        #endif
+    }
+    else if( ( ulHClk >= 35000000U ) && ( ulHClk < 60000000U ) )
+    {
+        #ifdef niEMAC_STM32FX
+            MODIFY_REG( pxEthInstance->MACMIIAR, ETH_MACMIIAR_CR, ETH_MACMIIAR_CR_Div26 );
+        #elif defined( niEMAC_STM32HX )
+            MODIFY_REG( pxEthInstance->MACMDIOAR, ETH_MACMDIOAR_CR, ETH_MACMDIOAR_CR_DIV26 );
+        #endif
+    }
+    else if( ( ulHClk >= 60000000U ) && ( ulHClk < 100000000U ) )
+    {
+        #ifdef niEMAC_STM32FX
+            MODIFY_REG( pxEthInstance->MACMIIAR, ETH_MACMIIAR_CR, ETH_MACMIIAR_CR_Div42 );
+        #elif defined( niEMAC_STM32HX )
+            MODIFY_REG( pxEthInstance->MACMDIOAR, ETH_MACMDIOAR_CR, ETH_MACMDIOAR_CR_DIV42 );
+        #endif
+    }
+    else if( ( ulHClk >= 100000000U ) && ( ulHClk < 150000000U ) )
+    {
+        #ifdef niEMAC_STM32FX
+            MODIFY_REG( pxEthInstance->MACMIIAR, ETH_MACMIIAR_CR, ETH_MACMIIAR_CR_Div62 );
+        #elif defined( niEMAC_STM32HX )
+            MODIFY_REG( pxEthInstance->MACMDIOAR, ETH_MACMDIOAR_CR, ETH_MACMDIOAR_CR_DIV62 );
+        #endif
+    }
+    else if ( ( ulHClk >= 150000000U ) && ( ulHClk <= 250000000U ) )
+    {
+        #ifdef niEMAC_STM32FX
+            MODIFY_REG( pxEthInstance->MACMIIAR, ETH_MACMIIAR_CR, ETH_MACMIIAR_CR_Div102 );
+        #elif defined( niEMAC_STM32HX )
+            MODIFY_REG( pxEthInstance->MACMDIOAR, ETH_MACMDIOAR_CR, ETH_MACMDIOAR_CR_DIV102 );
+        #endif
+    }
+    else
+    {
+        #ifdef niEMAC_STM32HX
+            MODIFY_REG( pxEthInstance->MACMDIOAR, ETH_MACMDIOAR_CR, ETH_MACMDIOAR_CR_DIV124 );
+        #endif
+    }
+}
+
 /*---------------------------------------------------------------------------*/
 
 static void prvHAL_ETH_SetHashTable( ETH_TypeDef * const pxEthInstance )
@@ -2458,7 +2612,7 @@ static void prvHAL_MAC_ErrorCallback( ETH_HandleTypeDef * pxEthHandle )
 
 /**
   * @brief  Initializes the ETH MSP.
-  * @param  heth: ETH handle
+  * @param  pxEthHandle: ETH handle
   * @retval None
 */
 void HAL_ETH_MspInit( ETH_HandleTypeDef * pxEthHandle )
@@ -2672,7 +2826,7 @@ void HAL_ETH_MspDeInit( ETH_HandleTypeDef * pxEthHandle )
 
 /*---------------------------------------------------------------------------*/
 
-#if defined( __MPU_PRESENT ) && ( __MPU_PRESENT == 1U )
+#if ( niEMAC_MPU != 0 )
 
 void MPU_Config(void)
 {
@@ -2682,7 +2836,7 @@ void MPU_Config(void)
 
     extern uint8_t __ETH_BUFFERS_START;
 
-    MPU_InitStruct.Enable = MPU_REGION_ENABLE;
+    MPU_InitStruct.Enable = ipconfigIS_ENABLED( niEMAC_USE_MPU ) ? ENABLE : DISABLE;
     MPU_InitStruct.Number = MPU_REGION_NUMBER0;
     MPU_InitStruct.BaseAddress = ( uint32_t ) &__ETH_BUFFERS_START;
     MPU_InitStruct.Size = MPU_REGION_SIZE_128KB;
@@ -2716,7 +2870,7 @@ void MPU_Config(void)
     HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
 }
 
-#endif /* if defined( __MPU_PRESENT ) && ( __MPU_PRESENT == 1U ) */
+#endif /* if ( niEMAC_MPU != 0 ) */
 
 #endif /* if 0 */
 
