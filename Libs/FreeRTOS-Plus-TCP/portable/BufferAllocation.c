@@ -46,7 +46,7 @@ static BaseType_t xIsValidNetworkDescriptor( const NetworkBufferDescriptor_t * p
     {
         xReturn = pdFALSE;
     }
-    else if( ( index < 0 ) || ( (uint32_t)index > ( ipconfigNUM_NETWORK_BUFFER_DESCRIPTORS - 1 ) ) )
+    else if( ( index < 0 ) || ( ( uint32_t ) index > ( ipconfigNUM_NETWORK_BUFFER_DESCRIPTORS - 1 ) ) )
     {
     	xReturn = pdFALSE;
     }
