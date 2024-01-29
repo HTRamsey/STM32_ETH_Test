@@ -1820,9 +1820,14 @@ static BaseType_t prvAcceptPacket( const NetworkBufferDescriptor_t * const pxDes
 		}
 
         ETH_HandleTypeDef * pxEthHandle = &xEthHandle;
-        uint32_t ulErrorCode = 0;
-        ( void ) HAL_ETH_GetRxDataErrorCode( pxEthHandle, &ulErrorCode );
-        if( ulErrorCode != 0 )
+
+        const ETH_DMADescTypeDef * const ulRxDesc = ( const ETH_DMADescTypeDef * const ) pxEthHandle->RxDescList.RxDesc[ pxEthHandle->RxDescList.RxDescIdx ];
+
+        #ifdef niEMAC_STM32FX
+            if( READ_BIT( ulRxDesc->DESC0, ETH_DMARXDESC_ES ) != 0 )
+        #elif defined( niEMAC_STM32HX )
+            if( READ_BIT( ulRxDesc->DESC3, ETH_DMARXNDESCWBF_ES ) != 0 )
+        #endif
         {
 			#if ipconfigIS_ENABLED( niEMAC_DEBUG_ERROR )
         		prvHAL_RX_ErrorCallback( pxEthHandle );
@@ -1843,8 +1848,6 @@ static BaseType_t prvAcceptPacket( const NetworkBufferDescriptor_t * const pxDes
 
 		#if ipconfigIS_ENABLED( ipconfigETHERNET_DRIVER_FILTERS_PACKETS )
 			#ifdef niEMAC_STM32HX
-				const ETH_DMADescTypeDef * const ulRxDesc = ( const ETH_DMADescTypeDef * const ) pxEthHandle->RxDescList.RxDesc[ pxEthHandle->RxDescList.RxDescIdx ];
-
 				const uint32_t ulRxDesc1 = ulRxDesc->DESC1;
 
                 if( ( ulRxDesc1 & ETH_CHECKSUM_IP_PAYLOAD_ERROR ) != 0 )
