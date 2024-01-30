@@ -141,6 +141,10 @@
     #error "Task Notifications must be enabled for NetworkInterface"
 #endif
 
+#if ipconfigIS_DISABLED( configUSE_COUNTING_SEMAPHORES )
+    #error "Counting Semaphores must be enabled for NetworkInterface"
+#endif
+
 #if ipconfigIS_DISABLED( ipconfigZERO_COPY_TX_DRIVER )
     #error "ipconfigZERO_COPY_TX_DRIVER must be enabled for NetworkInterface"
 #endif
@@ -209,7 +213,7 @@
 #define niEMAC_CACHEABLE ( defined( __DCACHE_PRESENT ) && ( __DCACHE_PRESENT == 1U ) )
 #if ( niEMAC_CACHEABLE != 0 )
     #define niEMAC_CACHE_ENABLED    ( _FLD2VAL( SCB_CCR_DC, SCB->CCR ) != 0 )
-    #define niEMAC_CACHE_MAINTENANCE ( niEMAC_CACHE_ENABLED && ipconfigIS_DISABLED( niEMAC_USE_MPU ) )
+    #define niEMAC_CACHE_MAINTENANCE ( ipconfigIS_DISABLED( niEMAC_USE_MPU ) && niEMAC_CACHE_ENABLED )
     #ifdef __SCB_DCACHE_LINE_SIZE
         #define niEMAC_DATA_ALIGNMENT    __SCB_DCACHE_LINE_SIZE
     #else
@@ -229,7 +233,7 @@
 #if defined( niEMAC_STM32FX )
 
     typedef __PACKED_STRUCT xTDES0 {
-        uint32_t 
+        uint32_t
             OWN : 1,
             IC : 1,
             LS : 1,
@@ -260,7 +264,7 @@
     } TDES0_t;
 
     typedef __PACKED_STRUCT xTDES1 {
-        uint32_t 
+        uint32_t
             RESERVED0 : 3,
             TBS2 : 13,
             RESERVED1 : 3,
@@ -268,28 +272,28 @@
     } TDES1_t;
 
     typedef __PACKED_STRUCT xTDES2 {
-        uint32_t 
+        uint32_t
             TBAP1 : 32;
     } TDES2_t;
 
     typedef __PACKED_STRUCT xTDES3 {
-        uint32_t 
+        uint32_t
             TBAP2 : 32;
     } TDES3_t;
 
     typedef __PACKED_STRUCT xTDES6 {
-        uint32_t 
+        uint32_t
             TTSL : 32;
     } TDES6_t;
 
     typedef __PACKED_STRUCT xTDES7 {
-        uint32_t 
+        uint32_t
             TTSH : 32;
     } TDES7_t;
 
 
     typedef __PACKED_STRUCT xRDES0 {
-        uint32_t 
+        uint32_t
             OWN : 1,
             AFM : 1,
             FL : 14,
@@ -312,7 +316,7 @@
     } RDES0_t;
 
     typedef __PACKED_STRUCT xRDES1 {
-        uint32_t 
+        uint32_t
             DIC : 1,
             RESERVED0 : 2,
             RBS2 : 13,
@@ -323,17 +327,17 @@
     } RDES1_t;
 
     typedef __PACKED_STRUCT xRDES2 {
-        uint32_t 
+        uint32_t
             RBAP1_RTSL : 32;
     } RDES2_t;
 
     typedef __PACKED_STRUCT xRDES3 {
-        uint32_t 
+        uint32_t
             RBAP2_RTSL : 32;
     } RDES3_t;
 
     typedef __PACKED_STRUCT xRDES4 {
-        uint32_t 
+        uint32_t
             RESERVED0 : 18,
             PV : 13,
             PTP : 1,
@@ -343,16 +347,16 @@
             IPCB : 1,
             IPPE : 1,
             IPHE : 1,
-            IPPT : 3; 
+            IPPT : 3;
     } RDES4_t;
 
     typedef __PACKED_STRUCT xRDES6 {
-        uint32_t 
+        uint32_t
             RTSL : 32;
     } RDES6_t;
 
     typedef __PACKED_STRUCT xRDES7 {
-        uint32_t 
+        uint32_t
             RTSH : 32;
     } RDES7_t;
 
@@ -983,8 +987,8 @@ static BaseType_t prvNetworkInterfaceOutput( NetworkInterface_t * pxInterface, N
             break;
         }
 
-        #if defined( niEMAC_CACHEABLE )
-            if( niEMAC_CACHE_MAINTENANCE )
+        #if ( niEMAC_CACHEABLE != 0 )
+            if( niEMAC_CACHE_MAINTENANCE != 0 )
             {
                 const uintptr_t uxDataStart = ( uintptr_t ) xTxBuffer.buffer;
                 const uintptr_t uxLineStart = uxDataStart & ~niEMAC_DATA_ALIGNMENT_MASK;
@@ -1301,20 +1305,20 @@ static void prvInitMacAddresses( ETH_TypeDef * const pxEthInstance, NetworkInter
 
     #if ipconfigIS_ENABLED( ipconfigUSE_IPv4 )
         #if ipconfigIS_ENABLED( ipconfigUSE_MDNS )
-            prvAddAllowedMACAddress( xMDNS_MacAddress.ucBytes );
+            prvAddAllowedMACAddress( pxInterface, xMDNS_MacAddress.ucBytes );
         #endif
         #if ipconfigIS_ENABLED( ipconfigUSE_LLMNR )
-            prvAddAllowedMACAddress( xLLMNR_MacAddress.ucBytes );
+            prvAddAllowedMACAddress( pxInterface, xLLMNR_MacAddress.ucBytes );
         #endif
     #endif
 
     #if ipconfigIS_ENABLED( ipconfigUSE_IPv6 )
-        prvAddAllowedMACAddress( pcLOCAL_ALL_NODES_MULTICAST_MAC.ucBytes );
+        prvAddAllowedMACAddress( pxInterface, pcLOCAL_ALL_NODES_MULTICAST_MAC.ucBytes );
         #if ipconfigIS_ENABLED( ipconfigUSE_MDNS )
-            prvAddAllowedMACAddress( xMDNS_MACAddressIPv6.ucBytes );
+            prvAddAllowedMACAddress( pxInterface, xMDNS_MACAddressIPv6.ucBytes );
         #endif
         #if ipconfigIS_ENABLED( ipconfigUSE_LLMNR )
-            prvAddAllowedMACAddress( xLLMNR_MacAddressIPv6.ucBytes );
+            prvAddAllowedMACAddress( pxInterface, xLLMNR_MacAddressIPv6.ucBytes );
         #endif
     #endif
 }
@@ -2369,8 +2373,8 @@ void HAL_ETH_RxAllocateCallback( uint8_t ** ppucBuff )
     const NetworkBufferDescriptor_t * pxBufferDescriptor = pxGetNetworkBufferWithDescriptor( niEMAC_DATA_BUFFER_SIZE, pdMS_TO_TICKS( niEMAC_DESCRIPTOR_WAIT_TIME_MS ) );
     if( pxBufferDescriptor != NULL )
     {
-        #ifdef niEMAC_CACHEABLE
-            if( niEMAC_CACHE_MAINTENANCE )
+        #if ( niEMAC_CACHEABLE != 0 )
+            if( niEMAC_CACHE_MAINTENANCE != 0 )
             {
                 SCB_InvalidateDCache_by_Addr( ( uint32_t * ) pxBufferDescriptor->pucEthernetBuffer, pxBufferDescriptor->xDataLength );
             }
@@ -2409,8 +2413,8 @@ void HAL_ETH_RxLinkCallback( void ** ppvStart, void ** ppvEnd, uint8_t * pucBuff
         *ppxEndDescriptor = pxCurDescriptor;
         /* Only single buffer packets are supported */
         configASSERT( *ppxStartDescriptor == *ppxEndDescriptor );
-        #ifdef niEMAC_CACHEABLE
-            if( niEMAC_CACHE_MAINTENANCE )
+        #if ( niEMAC_CACHEABLE != 0 )
+            if( niEMAC_CACHE_MAINTENANCE != 0 )
             {
                 SCB_InvalidateDCache_by_Addr( ( uint32_t * ) pucBuff, usLength );
             }
@@ -2480,7 +2484,7 @@ static BaseType_t prvHAL_ETH_Init( ETH_HandleTypeDef * const pxEthHandle, Networ
         #endif
 
         #if ( niEMAC_CACHEABLE != 0 )
-            if( niEMAC_CACHE_ENABLED )
+            if( niEMAC_CACHE_ENABLED != 0 )
             {
                 #if ( niEMAC_MPU != 0 )
                     configASSERT( _FLD2VAL( MPU_CTRL_ENABLE, MPU->CTRL ) != 0 );
@@ -2565,7 +2569,7 @@ static BaseType_t prvHAL_ETH_Init( ETH_HandleTypeDef * const pxEthHandle, Networ
         uint32_t ulReg;
         #ifdef niEMAC_STM32HX
             WRITE_REG( pxEthHandle->Instance->MAC1USTCR, ( HAL_RCC_GetHCLKFreq() / 1000000U ) - 1U );
-            
+
             ulReg = READ_REG( pxEthHandle->Instance->MACCR );
             SET_BIT( ulReg, ETH_MACCR_ACS );
             CLEAR_BIT( ulReg, ETH_MACCR_CST | ETH_MACCR_DR );
@@ -2778,7 +2782,7 @@ static BaseType_t prvHAL_ETH_ReadData( ETH_HandleTypeDef * const pxEthHandle, vo
 {
     configASSERT( ppvBuff != NULL );
     configASSERT( pxEthHandle->gState == HAL_ETH_STATE_STARTED );
-    
+
     BaseType_t xResult = pdFAIL;
 
     uint8_t rxdataready = 0U;
