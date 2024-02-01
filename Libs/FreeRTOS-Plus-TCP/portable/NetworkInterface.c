@@ -205,13 +205,13 @@
 /*===========================================================================*/
 /*---------------------------------------------------------------------------*/
 
-#define niEMAC_MPU ( defined( __MPU_PRESENT ) && ( __MPU_PRESENT == 1U ) )
-#if ( niEMAC_MPU != 0 )
+#if ( defined( __MPU_PRESENT ) && ( __MPU_PRESENT == 1U ) )
+    #define niEMAC_MPU
     #define niEMAC_MPU_ENABLED      ( _FLD2VAL( MPU_CTRL_ENABLE, MPU->CTRL ) != 0 )
 #endif
 
-#define niEMAC_CACHEABLE ( defined( __DCACHE_PRESENT ) && ( __DCACHE_PRESENT == 1U ) )
-#if ( niEMAC_CACHEABLE != 0 )
+#if ( defined( __DCACHE_PRESENT ) && ( __DCACHE_PRESENT == 1U ) )
+    #define niEMAC_CACHEABLE
     #define niEMAC_CACHE_ENABLED    ( _FLD2VAL( SCB_CCR_DC, SCB->CCR ) != 0 )
     #define niEMAC_CACHE_MAINTENANCE ( ipconfigIS_DISABLED( niEMAC_USE_MPU ) && niEMAC_CACHE_ENABLED )
     #ifdef __SCB_DCACHE_LINE_SIZE
@@ -220,7 +220,7 @@
         #define niEMAC_DATA_ALIGNMENT    32U
     #endif
 #else
-    #define niEMAC_DATA_ALIGNMENT   4U
+    #define niEMAC_DATA_ALIGNMENT   portBYTE_ALIGNMENT
 #endif
 
 #define niEMAC_DATA_ALIGNMENT_MASK   ( niEMAC_DATA_ALIGNMENT - 1U )
@@ -987,7 +987,7 @@ static BaseType_t prvNetworkInterfaceOutput( NetworkInterface_t * pxInterface, N
             break;
         }
 
-        #if ( niEMAC_CACHEABLE != 0 )
+        #ifdef niEMAC_CACHEABLE
             if( niEMAC_CACHE_MAINTENANCE != 0 )
             {
                 const uintptr_t uxDataStart = ( uintptr_t ) xTxBuffer.buffer;
@@ -2373,7 +2373,7 @@ void HAL_ETH_RxAllocateCallback( uint8_t ** ppucBuff )
     const NetworkBufferDescriptor_t * pxBufferDescriptor = pxGetNetworkBufferWithDescriptor( niEMAC_DATA_BUFFER_SIZE, pdMS_TO_TICKS( niEMAC_DESCRIPTOR_WAIT_TIME_MS ) );
     if( pxBufferDescriptor != NULL )
     {
-        #if ( niEMAC_CACHEABLE != 0 )
+        #ifdef niEMAC_CACHEABLE
             if( niEMAC_CACHE_MAINTENANCE != 0 )
             {
                 SCB_InvalidateDCache_by_Addr( ( uint32_t * ) pxBufferDescriptor->pucEthernetBuffer, pxBufferDescriptor->xDataLength );
@@ -2413,7 +2413,7 @@ void HAL_ETH_RxLinkCallback( void ** ppvStart, void ** ppvEnd, uint8_t * pucBuff
         *ppxEndDescriptor = pxCurDescriptor;
         /* Only single buffer packets are supported */
         configASSERT( *ppxStartDescriptor == *ppxEndDescriptor );
-        #if ( niEMAC_CACHEABLE != 0 )
+        #ifdef niEMAC_CACHEABLE
             if( niEMAC_CACHE_MAINTENANCE != 0 )
             {
                 SCB_InvalidateDCache_by_Addr( ( uint32_t * ) pucBuff, usLength );
@@ -2483,11 +2483,11 @@ static BaseType_t prvHAL_ETH_Init( ETH_HandleTypeDef * const pxEthHandle, Networ
             configASSERT( __HAL_RCC_ETH1RX_IS_CLK_ENABLED() != 0 );
         #endif
 
-        #if ( niEMAC_CACHEABLE != 0 )
+        #ifdef niEMAC_CACHEABLE
             if( niEMAC_CACHE_ENABLED != 0 )
             {
-                #if ( niEMAC_MPU != 0 )
-                    configASSERT( _FLD2VAL( MPU_CTRL_ENABLE, MPU->CTRL ) != 0 );
+                #ifdef niEMAC_MPU
+                    configASSERT( niEMAC_MPU_ENABLED != 0 );
                 #else
                     configASSERT( pdFALSE );
                 #endif
@@ -3688,7 +3688,7 @@ void HAL_ETH_MspDeInit( ETH_HandleTypeDef * pxEthHandle )
 
 /*---------------------------------------------------------------------------*/
 
-#if ( niEMAC_MPU != 0 )
+#ifdef niEMAC_MPU
 
 void MPU_Config(void)
 {
@@ -3732,7 +3732,7 @@ void MPU_Config(void)
     HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
 }
 
-#endif /* if ( niEMAC_MPU != 0 ) */
+#endif /* ifdef niEMAC_MPU */
 
 #endif /* if 0 */
 
