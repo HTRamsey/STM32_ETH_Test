@@ -31,6 +31,11 @@
 	</natures>
 	<linkedResources>
 		<link>
+			<name>Common</name>
+			<type>2</type>
+			<location>/home/jonglaser/Desktop/dev/Projects/STM32_ETH_Test/Common/src</location>
+		</link>
+		<link>
 			<name>Libs</name>
 			<type>2</type>
 			<location>/home/jonglaser/Desktop/dev/Projects/STM32_ETH_Test/Libs</location>

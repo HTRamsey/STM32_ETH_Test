@@ -53,6 +53,7 @@
 									<listOptionValue builtIn="false" value="/home/jonglaser/Desktop/dev/Projects/STM32_ETH_Test/Libs/FreeRTOS-Plus-TCP/include"/>
 									<listOptionValue builtIn="false" value="/home/jonglaser/Desktop/dev/Projects/STM32_ETH_Test/Libs/FreeRTOS/portable"/>
 									<listOptionValue builtIn="false" value="/home/jonglaser/Desktop/dev/Projects/STM32_ETH_Test/Libs/FreeRTOS/include"/>
+									<listOptionValue builtIn="false" value="/home/jonglaser/Desktop/dev/Projects/STM32_ETH_Test/Common/inc"/>
 								</option>
 								<option id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.languagestandard.780876284" name="Language standard" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.languagestandard" useByScannerDiscovery="true" value="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.languagestandard.value.gnu90" valueType="enumerated"/>
 								<option id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.warnings.extra.649221196" name="Enable extra warning flags (-Wextra)" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.warnings.extra" useByScannerDiscovery="false" value="false" valueType="boolean"/>
@@ -85,6 +86,7 @@
 						</toolChain>
 					</folderInfo>
 					<sourceEntries>
+						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Common"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Core"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Drivers"/>
 						<entry excluding="FreeRTOS-Plus-TCP/portable/Legacy/" flags="VALUE_WORKSPACE_PATH" kind="sourcePath" name="Libs"/>
