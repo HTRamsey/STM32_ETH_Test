@@ -234,7 +234,7 @@
 #define ETH_REG_WRITE_DELAY     0x00000001U
 
 /* ETHERNET MACCR register Mask */
-#define ETH_MACCR_CLEAR_MASK    0xFF20810FU
+#define ETH_MACCR_CLEAR_MASK    0xFD20810FU
 
 /* ETHERNET MACFCR register Mask */
 #define ETH_MACFCR_CLEAR_MASK   0x0000FF41U
@@ -1121,13 +1121,12 @@ HAL_StatusTypeDef HAL_ETH_ReadData(ETH_HandleTypeDef *heth, void **pAppBuff)
         heth->RxDescList.RxDataLength = 0;
       }
 
+      /* Get the Frame Length of the received packet: substruct 4 bytes of the CRC */
+      bufflength = ((dmarxdesc->DESC0 & ETH_DMARXDESC_FL) >> ETH_DMARXDESC_FRAMELENGTHSHIFT) - 4U;
+
       /* Check if last descriptor */
-      bufflength = heth->Init.RxBuffLen;
       if (READ_BIT(dmarxdesc->DESC0, ETH_DMARXDESC_LS) != (uint32_t)RESET)
       {
-        /* Get the Frame Length of the received packet: substruct 4 bytes of the CRC */
-        bufflength = ((dmarxdesc->DESC0 & ETH_DMARXDESC_FL) >> ETH_DMARXDESC_FRAMELENGTHSHIFT) - 4U;
-
         /* Save Last descriptor index */
         heth->RxDescList.pRxLastRxDesc = dmarxdesc->DESC0;
 
@@ -1193,6 +1192,7 @@ HAL_StatusTypeDef HAL_ETH_ReadData(ETH_HandleTypeDef *heth, void **pAppBuff)
   */
 static void ETH_UpdateDescriptor(ETH_HandleTypeDef *heth)
 {
+  uint32_t tailidx;
   uint32_t descidx;
   uint32_t desccount;
   ETH_DMADescTypeDef *dmarxdesc;
@@ -1231,18 +1231,12 @@ static void ETH_UpdateDescriptor(ETH_HandleTypeDef *heth)
     {
       if (heth->RxDescList.ItMode == 0U)
       {
-        WRITE_REG(dmarxdesc->DESC1, ETH_DMARXDESC_DIC | ETH_RX_BUF_SIZE | ETH_DMARXDESC_RCH);
+        WRITE_REG(dmarxdesc->DESC1, heth->Init.RxBuffLen | ETH_DMARXDESC_DIC | ETH_DMARXDESC_RCH);
       }
       else
       {
-        WRITE_REG(dmarxdesc->DESC1, ETH_RX_BUF_SIZE | ETH_DMARXDESC_RCH);
+        WRITE_REG(dmarxdesc->DESC1, heth->Init.RxBuffLen | ETH_DMARXDESC_RCH);
       }
-
-      /* Before transferring the ownership to DMA, make sure that the RX descriptors bits writing
-         is fully performed.
-         The __DMB() instruction is added to avoid any potential compiler optimization that
-         may lead to abnormal behavior. */
-      __DMB();
 
       SET_BIT(dmarxdesc->DESC0, ETH_DMARXDESC_OWN);
 
@@ -1256,8 +1250,14 @@ static void ETH_UpdateDescriptor(ETH_HandleTypeDef *heth)
 
   if (heth->RxDescList.RxBuildDescCnt != desccount)
   {
+    /* Set the tail pointer index */
+    tailidx = (descidx + 1U) % ETH_RX_DESC_CNT;
+
+    /* DMB instruction to avoid race condition */
+    __DMB();
+
     /* Set the Tail pointer address */
-    WRITE_REG(heth->Instance->DMARPDR, 0);
+    WRITE_REG(heth->Instance->DMARPDR, ((uint32_t)(heth->Init.RxDesc + (tailidx))));
 
     heth->RxDescList.RxBuildDescIdx = descidx;
     heth->RxDescList.RxBuildDescCnt = desccount;
@@ -2206,7 +2206,7 @@ HAL_StatusTypeDef HAL_ETH_GetMACConfig(ETH_HandleTypeDef *heth, ETH_MACConfigTyp
   macconf->AutomaticPadCRCStrip = ((READ_BIT(heth->Instance->MACCR, ETH_MACCR_APCS) >> 7) > 0U) ? ENABLE : DISABLE;
   macconf->InterPacketGapVal = READ_BIT(heth->Instance->MACCR, ETH_MACCR_IFG);
   macconf->ChecksumOffload = ((READ_BIT(heth->Instance->MACCR, ETH_MACCR_IPCO) >> 10U) > 0U) ? ENABLE : DISABLE;
-
+  macconf->CRCStripTypePacket = ((READ_BIT(heth->Instance->MACCR, ETH_MACCR_CSTF) >> 25U) > 0U) ? ENABLE : DISABLE;
 
   macconf->TransmitFlowControl = ((READ_BIT(heth->Instance->MACFCR, ETH_MACFCR_TFCE) >> 1) > 0U) ? ENABLE : DISABLE;
   macconf->ZeroQuantaPause = ((READ_BIT(heth->Instance->MACFCR, ETH_MACFCR_ZQPD) >> 7) == 0U) ? ENABLE : DISABLE;
@@ -2738,10 +2738,11 @@ static void ETH_SetMACConfig(ETH_HandleTypeDef *heth,  ETH_MACConfigTypeDef *mac
   /*------------------------ ETHERNET MACCR Configuration --------------------*/
   /* Get the ETHERNET MACCR value */
   tmpreg1 = (heth->Instance)->MACCR;
-  /* Clear WD, PCE, PS, TE and RE bits */
+  /* Clear CSTF, WD, PCE, PS, TE and RE bits */
   tmpreg1 &= ETH_MACCR_CLEAR_MASK;
 
-  tmpreg1 |= (uint32_t)(((uint32_t)((macconf->Watchdog == DISABLE) ? 1U : 0U) << 23U) |
+  tmpreg1 |= (uint32_t)(((uint32_t)macconf->CRCStripTypePacket << 25U) |
+                        ((uint32_t)((macconf->Watchdog == DISABLE) ? 1U : 0U) << 23U) |
                         ((uint32_t)((macconf->Jabber == DISABLE) ? 1U : 0U) << 22U) |
                         (uint32_t)macconf->InterPacketGapVal |
                         ((uint32_t)macconf->CarrierSenseDuringTransmit << 16U) |
@@ -2854,6 +2855,7 @@ static void ETH_MACDMAConfig(ETH_HandleTypeDef *heth)
   macDefaultConf.CarrierSenseDuringTransmit = DISABLE;
   macDefaultConf.ReceiveOwn = ENABLE;
   macDefaultConf.LoopbackMode = DISABLE;
+  macDefaultConf.CRCStripTypePacket = ENABLE;
   macDefaultConf.ChecksumOffload = ENABLE;
   macDefaultConf.RetryTransmission = DISABLE;
   macDefaultConf.AutomaticPadCRCStrip = DISABLE;
@@ -2997,7 +2999,7 @@ static void ETH_DMARxDescListInit(ETH_HandleTypeDef *heth)
     dmarxdesc->DESC0 = ETH_DMARXDESC_OWN;
 
     /* Set Buffer1 size and Second Address Chained bit */
-    dmarxdesc->DESC1 = ETH_DMARXDESC_RCH | ETH_RX_BUF_SIZE;
+    dmarxdesc->DESC1 = heth->Init.RxBuffLen | ETH_DMARXDESC_RCH;
 
     /* Enable Ethernet DMA Rx Descriptor interrupt */
     dmarxdesc->DESC1 &= ~ETH_DMARXDESC_DIC;
