@@ -117,7 +117,7 @@
             eRAStateIPWait,   /* Wait for a reply, if any */
             eRAStatePreLease, /* The device is ready to go to the 'eRAStateLease' state. */
             eRAStateLease,    /* The device is up, repeat the RA-process when timer expires. */
-            eRAStateFailed,
+            eRAStateFailed
         } eRAState_t;
 
         struct xRA_DATA
@@ -141,22 +141,15 @@
 /** @brief The description of an end-point. */
     typedef struct xNetworkEndPoint
     {
-        union
-        {
-            struct
-            {
-                IPV4Parameters_t ipv4_settings; /**< Actual IPv4 settings used by the end-point. */
-                IPV4Parameters_t ipv4_defaults; /**< Use values form "ipv4_defaults" in case DHCP has failed. */
-            };
-            #if ( ipconfigUSE_IPv6 != 0 )
-                struct
-                {
-                    IPV6Parameters_t ipv6_settings; /**< Actual IPv6 settings used by the end-point. */
-                    IPV6Parameters_t ipv6_defaults; /**< Use values form "ipv6_defaults" in case DHCP has failed. */
-                };
-            #endif
-        };
-        MACAddress_t xMACAddress; /**< The MAC-address assigned to this end-point. */
+        #if ( ipconfigUSE_IPv4 != 0 )
+            IPV4Parameters_t ipv4_settings; /**< Actual IPv4 settings used by the end-point. */
+            IPV4Parameters_t ipv4_defaults; /**< Use values form "ipv4_defaults" in case DHCP has failed. */
+        #endif
+        #if ( ipconfigUSE_IPv6 != 0 )
+            IPV6Parameters_t ipv6_settings; /**< Actual IPv6 settings used by the end-point. */
+            IPV6Parameters_t ipv6_defaults; /**< Use values form "ipv6_defaults" in case DHCP has failed. */
+        #endif
+        MACAddress_t xMACAddress;           /**< The MAC-address assigned to this end-point. */
         struct
         {
             uint32_t
@@ -255,12 +248,20 @@
                                                         uint32_t ulWhere );
 
 /*
- * Find the best fitting end-point to reach a given IP-address on a given interface
+ * Find the best fitting IPv4 end-point to reach a given IP-address on a given interface
  * 'ulWhere' is temporary and or debugging only.
  */
     NetworkEndPoint_t * FreeRTOS_InterfaceEndPointOnNetMask( const NetworkInterface_t * pxInterface,
                                                              uint32_t ulIPAddress,
                                                              uint32_t ulWhere );
+
+/*
+ * Finds an endpoint on the given interface which is in the same subnet as the
+ * given IP address. If NULL is passed for pxInterface, it looks through all the
+ * interfaces to find an endpoint in the same subnet as the given IP address.
+ */
+    NetworkEndPoint_t * FreeRTOS_InterfaceEPInSameSubnet_IPv6( const NetworkInterface_t * pxInterface,
+                                                               const IPv6_Address_t * pxIPAddress );
 
     #if ( ipconfigUSE_IPv6 != 0 )
         NetworkEndPoint_t * FreeRTOS_FindEndPointOnNetMask_IPv6( const IPv6_Address_t * pxIPv6Address );
@@ -322,9 +323,11 @@
     void vSetSocketEndpoint( Socket_t xSocket,
                              NetworkEndPoint_t * pxEndPoint );
 
-    const char * pcEndpointName( const NetworkEndPoint_t * pxEndPoint,
-                                 char * pcBuffer,
-                                 size_t uxSize );
+    #if ( ( ipconfigHAS_PRINTF != 0 ) || ( ipconfigHAS_DEBUG_PRINTF != 0 ) )
+        const char * pcEndpointName( const NetworkEndPoint_t * pxEndPoint,
+                                     char * pcBuffer,
+                                     size_t uxSize );
+    #endif /* ( ( ipconfigHAS_PRINTF != 0 ) || ( ipconfigHAS_DEBUG_PRINTF != 0 ) ) */
 
     typedef enum
     {
@@ -333,7 +336,7 @@
         eIPv6_SiteLocal, /* 1111 1110 11  */
         eIPv6_Multicast, /* 1111 1111     */
         eIPv6_Loopback,  /* 1111 (::1)    */
-        eIPv6_Unknown,   /* Not implemented. */
+        eIPv6_Unknown    /* Not implemented. */
     }
     IPv6_Type_t;
 

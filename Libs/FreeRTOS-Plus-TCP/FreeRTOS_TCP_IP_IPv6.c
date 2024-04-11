@@ -100,6 +100,15 @@ BaseType_t xProcessReceivedTCPPacket_IPV6( NetworkBufferDescriptor_t * pxDescrip
 {
     /* Function might modify the parameter. */
     NetworkBufferDescriptor_t * pxNetworkBuffer = pxDescriptor;
+    const ProtocolHeaders_t * pxProtocolHeaders;
+    FreeRTOS_Socket_t * pxSocket;
+    uint16_t ucTCPFlags;
+    uint16_t usLocalPort;
+    uint16_t usRemotePort;
+    IPv46_Address_t xRemoteIP;
+    uint32_t ulSequenceNumber;
+    uint32_t ulAckNumber;
+    BaseType_t xResult = pdPASS;
 
     configASSERT( pxNetworkBuffer != NULL );
     configASSERT( pxNetworkBuffer->pucEthernetBuffer != NULL );
@@ -109,16 +118,14 @@ BaseType_t xProcessReceivedTCPPacket_IPV6( NetworkBufferDescriptor_t * pxDescrip
     /* MISRA Ref 11.3.1 [Misaligned access] */
     /* More details at: https://github.com/FreeRTOS/FreeRTOS-Plus-TCP/blob/main/MISRA.md#rule-113 */
     /* coverity[misra_c_2012_rule_11_3_violation] */
-    const ProtocolHeaders_t * pxProtocolHeaders = ( ( const ProtocolHeaders_t * )
-                                                    &( pxNetworkBuffer->pucEthernetBuffer[ ipSIZE_OF_ETH_HEADER + uxIPHeaderSizePacket( pxNetworkBuffer ) ] ) );
-    FreeRTOS_Socket_t * pxSocket;
-    uint16_t ucTCPFlags = pxProtocolHeaders->xTCPHeader.ucTCPFlags;
-    uint16_t usLocalPort = FreeRTOS_htons( pxProtocolHeaders->xTCPHeader.usDestinationPort );
-    uint16_t usRemotePort = FreeRTOS_htons( pxProtocolHeaders->xTCPHeader.usSourcePort );
-    IPv46_Address_t xRemoteIP;
-    uint32_t ulSequenceNumber = FreeRTOS_ntohl( pxProtocolHeaders->xTCPHeader.ulSequenceNumber );
-    uint32_t ulAckNumber = FreeRTOS_ntohl( pxProtocolHeaders->xTCPHeader.ulAckNr );
-    BaseType_t xResult = pdPASS;
+    pxProtocolHeaders = ( ( const ProtocolHeaders_t * )
+                          &( pxNetworkBuffer->pucEthernetBuffer[ ipSIZE_OF_ETH_HEADER + uxIPHeaderSizePacket( pxNetworkBuffer ) ] ) );
+
+    ucTCPFlags = pxProtocolHeaders->xTCPHeader.ucTCPFlags;
+    usLocalPort = FreeRTOS_htons( pxProtocolHeaders->xTCPHeader.usDestinationPort );
+    usRemotePort = FreeRTOS_htons( pxProtocolHeaders->xTCPHeader.usSourcePort );
+    ulSequenceNumber = FreeRTOS_ntohl( pxProtocolHeaders->xTCPHeader.ulSequenceNumber );
+    ulAckNumber = FreeRTOS_ntohl( pxProtocolHeaders->xTCPHeader.ulAckNr );
 
     /* Check for a minimum packet size. */
     if( pxNetworkBuffer->xDataLength < ( ipSIZE_OF_ETH_HEADER + uxIPHeaderSizePacket( pxNetworkBuffer ) + ipSIZE_OF_TCP_HEADER ) )
@@ -134,6 +141,7 @@ BaseType_t xProcessReceivedTCPPacket_IPV6( NetworkBufferDescriptor_t * pxDescrip
         /* coverity[misra_c_2012_rule_11_3_violation] */
         const IPHeader_IPv6_t * pxIPHeader_IPv6 = ( ( IPHeader_IPv6_t * ) &( pxNetworkBuffer->pucEthernetBuffer[ ipSIZE_OF_ETH_HEADER ] ) );
         ( void ) memcpy( xRemoteIP.xIPAddress.xIP_IPv6.ucBytes, pxIPHeader_IPv6->xSourceAddress.ucBytes, sizeof( IPv6_Address_t ) );
+        xRemoteIP.xIs_IPv6 = pdTRUE;
 
         /* Find the destination socket, and if not found: return a socket listing to
          * the destination PORT. */

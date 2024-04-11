@@ -60,6 +60,33 @@
  * MACROS details :
  * https://www.freertos.org/FreeRTOS-Plus/FreeRTOS_Plus_TCP/TCP_IP_Configuration.html
  */
+
+/*---------------------------------------------------------------------------*/
+
+/*
+ * Compile time assertion with zero runtime effects.
+ * It will assert on 'e' not being zero, as it tries to divide by it.
+ */
+
+#ifdef static_assert
+    #define STATIC_ASSERT( e )    static_assert( e, "FreeRTOS-Plus-TCP Error" )
+#elif defined( _Static_assert )
+    #define STATIC_ASSERT( e )    _Static_assert( e, "FreeRTOS-Plus-TCP Error" )
+#else
+/* MISRA Ref 20.10.1 [Lack of sizeof operator and compile time error checking] */
+/* More details at: https://github.com/FreeRTOS/FreeRTOS-Plus-TCP/blob/main/MISRA.md#rule-2010 */
+/* coverity[misra_c_2012_rule_20_10_violation] */
+    #define ASSERT_CONCAT_( a, b )    a ## b
+    #define ASSERT_CONCAT( a, b )     ASSERT_CONCAT_( a, b )
+    #ifdef __COUNTER__
+        #define STATIC_ASSERT( e ) \
+    ; enum { ASSERT_CONCAT( static_assert_, __COUNTER__ ) = ( 1 / ( int ) ( !!( e ) ) ) }
+    #else
+        #define STATIC_ASSERT( e ) \
+    ; enum { ASSERT_CONCAT( assert_line_, __LINE__ ) = ( 1 / ( int ) ( !!( e ) ) ) }
+    #endif
+#endif /* ifdef static_assert */
+
 /*---------------------------------------------------------------------------*/
 
 /*
@@ -360,7 +387,7 @@
  */
 
 #ifndef ipconfigENDPOINT_DNS_ADDRESS_COUNT
-    #define ipconfigENDPOINT_DNS_ADDRESS_COUNT    ( 2 )
+    #define ipconfigENDPOINT_DNS_ADDRESS_COUNT    ( 2U )
 #endif
 
 #if ( ipconfigENDPOINT_DNS_ADDRESS_COUNT < 1 )
@@ -990,6 +1017,8 @@
  * Unit: count of ports
  * Minimum: 0
  * Maximum: 32
+ *
+ * There can be at most 32 PHY ports, but in most cases there are 4 or less.
  */
 
 #ifndef ipconfigPHY_MAX_PORTS
@@ -1381,11 +1410,11 @@
  */
 
 #ifndef ipconfigTCP_MSS
-    #define ipconfigTCP_MSS    ( ipconfigNETWORK_MTU - 40 )
+    #define ipconfigTCP_MSS    ( ipconfigNETWORK_MTU - 40U )
 #endif
 
 #if ( ipconfigTCP_MSS < 536 )
-    // #error ipconfigTCP_MSS must be at least 536 ( tcpMINIMUM_SEGMENT_LENGTH )
+    //#error ipconfigTCP_MSS must be at least 536 ( tcpMINIMUM_SEGMENT_LENGTH )
 #endif
 
 #if ( ipconfigTCP_MSS > SIZE_MAX )
@@ -2131,6 +2160,10 @@
     #error ipconfigNETWORK_MTU needs to be at least 586 to use DHCP
 #endif
 
+#if ( ipconfigIS_ENABLED( ipconfigUSE_DHCP ) && ipconfigIS_DISABLED( ipconfigUSE_IPv4 ) )
+    #error DHCP Cannot be enabled without IPv4
+#endif
+
 /*---------------------------------------------------------------------------*/
 
 /*
@@ -2348,7 +2381,7 @@
  */
 
 #ifndef ipconfigDNS_CACHE_ENTRIES
-    #define ipconfigDNS_CACHE_ENTRIES    ( 1 )
+    #define ipconfigDNS_CACHE_ENTRIES    ( 1U )
 #endif
 
 #if ( ipconfigDNS_CACHE_ENTRIES < 1 )
@@ -2382,7 +2415,7 @@
  */
 
 #ifndef ipconfigDNS_CACHE_NAME_LENGTH
-    #define ipconfigDNS_CACHE_NAME_LENGTH    ( 254 )
+    #define ipconfigDNS_CACHE_NAME_LENGTH    ( 254U )
 #endif
 
 #if ( ipconfigDNS_CACHE_NAME_LENGTH < 1 )
@@ -3148,7 +3181,7 @@
  */
 
 #ifndef ipconfigTCP_MAY_LOG_PORT
-    #define ipconfigTCP_MAY_LOG_PORT( xPort )    ( ( xPort ) != 23 )
+    #define ipconfigTCP_MAY_LOG_PORT( xPort )    ( ( xPort ) != 23U )
 #endif
 
 #if ( ( ipconfigTCP_MAY_LOG_PORT( 0 ) != 0 ) && ( ipconfigTCP_MAY_LOG_PORT( 0 ) != 1 ) )

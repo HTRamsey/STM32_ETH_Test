@@ -172,17 +172,6 @@
     }
     /*-----------------------------------------------------------*/
 
-/**
- * @brief Returns the current state of a DHCP process.
- *
- * @param[in] pxEndPoint the end-point which is going through the DHCP process.
- */
-    eDHCPState_t eGetDHCPState( const struct xNetworkEndPoint * pxEndPoint )
-    {
-        /* Note that EP_DHCPData is defined as "pxEndPoint->xDHCPData". */
-        return EP_DHCPData.eDHCPState;
-    }
-/*-----------------------------------------------------------*/
 
 /**
  * @brief Process the DHCP state machine based on current state.
@@ -843,7 +832,7 @@
  *        using it.
  * @param[in] pxEndPoint The end-point that stops using the socket.
  */
-    void prvCloseDHCPSocket( NetworkEndPoint_t * pxEndPoint )
+    static void prvCloseDHCPSocket( NetworkEndPoint_t * pxEndPoint )
     {
         if( ( EP_DHCPData.xDHCPSocket == NULL ) || ( EP_DHCPData.xDHCPSocket != xDHCPv4Socket ) )
         {
@@ -905,7 +894,7 @@
                 ( void ) FreeRTOS_setsockopt( xDHCPv4Socket, 0, FREERTOS_SO_RCVTIMEO, &( xTimeoutTime ), sizeof( TickType_t ) );
                 ( void ) FreeRTOS_setsockopt( xDHCPv4Socket, 0, FREERTOS_SO_SNDTIMEO, &( xTimeoutTime ), sizeof( TickType_t ) );
 
-                memset( &xAddress, 0, sizeof( xAddress ) );
+                ( void ) memset( &xAddress, 0, sizeof( xAddress ) );
                 xAddress.sin_family = FREERTOS_AF_INET4;
                 xAddress.sin_len = ( uint8_t ) sizeof( xAddress );
                 /* Bind to the standard DHCP client port. */
@@ -1389,19 +1378,13 @@
         uint8_t * pucUDPPayloadBuffer = NULL;
 
         #if ( ipconfigDHCP_REGISTER_HOSTNAME == 1 )
-            const char * pucHostName = pcApplicationHostnameHook();
             size_t uxNameLength = 0;
+            const char * pucHostName = pcApplicationHostnameHook();
 
             if( pucHostName != NULL )
             {
                 uxNameLength = strlen( pucHostName );
             }
-
-            uint8_t * pucPtr;
-
-            /* memcpy() helper variables for MISRA Rule 21.15 compliance*/
-            const void * pvCopySource;
-            void * pvCopyDest;
 
             /* Two extra bytes for option code and length. */
             uxRequiredBufferSize += ( 2U + uxNameLength );
@@ -1413,6 +1396,8 @@
 
         if( pxNetworkBuffer != NULL )
         {
+            uint8_t * pucIPType;
+
             /* Leave space for the UDP header. */
             pucUDPPayloadBuffer = &( pxNetworkBuffer->pucEthernetBuffer[ ipUDP_PAYLOAD_OFFSET_IPv4 ] );
 
@@ -1421,16 +1406,16 @@
             /* coverity[misra_c_2012_rule_11_3_violation] */
             pxDHCPMessage = ( ( DHCPMessage_IPv4_t * ) pucUDPPayloadBuffer );
 
-            {
-                uint8_t * pucIPType;
+            /* Store the IP type at a known location.
+             * Later the type must be known to translate
+             * a payload- to a network buffer.
+             */
 
-                /* Store the IP type at a known location.
-                 * Later the type must be known to translate
-                 * a payload- to a network buffer.
-                 */
-                pucIPType = pucUDPPayloadBuffer - ipUDP_PAYLOAD_IP_TYPE_OFFSET;
-                *pucIPType = ipTYPE_IPv4;
-            }
+            /* MISRA Ref 18.4.1 [Usage of +, -, += and -= operators on expression of pointer type]. */
+            /* More details at: https://github.com/FreeRTOS/FreeRTOS-Plus-TCP/blob/main/MISRA.md#rule-184. */
+            /* coverity[misra_c_2012_rule_18_4_violation] */
+            pucIPType = pucUDPPayloadBuffer - ipUDP_PAYLOAD_IP_TYPE_OFFSET;
+            *pucIPType = ipTYPE_IPv4;
 
             /* Most fields need to be zero. */
             ( void ) memset( pxDHCPMessage, 0x00, sizeof( DHCPMessage_IPv4_t ) );
@@ -1462,7 +1447,7 @@
                  * it easier to lookup a device in a router's list of DHCP clients. */
 
                 /* Point to where the OPTION_END was stored to add data. */
-                pucPtr = &( pucUDPPayloadBuffer[ dhcpFIRST_OPTION_BYTE_OFFSET + ( *pxOptionsArraySize - 1U ) ] );
+                uint8_t * pucPtr = &( pucUDPPayloadBuffer[ dhcpFIRST_OPTION_BYTE_OFFSET + ( *pxOptionsArraySize - 1U ) ] );
                 pucPtr[ 0U ] = dhcpIPv4_DNS_HOSTNAME_OPTIONS_CODE;
                 pucPtr[ 1U ] = ( uint8_t ) uxNameLength;
 
@@ -1473,8 +1458,9 @@
                  */
                 if( pucHostName != NULL )
                 {
-                    pvCopySource = pucHostName;
-                    pvCopyDest = &pucPtr[ 2U ];
+                    /* memcpy() helper variables for MISRA Rule 21.15 compliance*/
+                    const void * pvCopySource = pucHostName;
+                    void * pvCopyDest = &pucPtr[ 2U ];
 
                     ( void ) memcpy( pvCopyDest, pvCopySource, uxNameLength );
                 }

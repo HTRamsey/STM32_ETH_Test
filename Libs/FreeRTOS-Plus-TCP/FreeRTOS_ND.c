@@ -285,7 +285,7 @@
     {
         BaseType_t x;
         BaseType_t xFreeEntry = -1, xEntryFound = -1;
-        BaseType_t xOldestValue = ipconfigMAX_ARP_AGE + 1;
+        uint16_t xOldestValue = ipconfigMAX_ARP_AGE + 1;
         BaseType_t xOldestEntry = 0;
 
         /* For each entry in the ND cache table. */
@@ -592,6 +592,7 @@
         MACAddress_t xMultiCastMacAddress;
         NetworkBufferDescriptor_t * pxDescriptor = pxNetworkBuffer;
         NetworkBufferDescriptor_t * pxNewDescriptor = NULL;
+        BaseType_t xReleased = pdFALSE;
 
         if( ( pxEndPoint != NULL ) && ( pxEndPoint->bits.bIPv6 != pdFALSE_UNSIGNED ) )
         {
@@ -675,7 +676,13 @@
 
                 /* This function will fill in the eth addresses and send the packet */
                 vReturnEthernetFrame( pxDescriptor, pdTRUE );
+                xReleased = pdTRUE;
             }
+        }
+
+        if( ( pxDescriptor != NULL ) && ( xReleased == pdFALSE ) )
+        {
+            vReleaseNetworkBufferAndDescriptor( pxDescriptor );
         }
     }
 /*-----------------------------------------------------------*/
@@ -917,9 +924,10 @@
 
         if( memcmp( pxIPv6Address->ucBytes, pxIPHeader->xSourceAddress.ucBytes, ipSIZE_OF_IPv6_ADDRESS ) == 0 )
         {
-            FreeRTOS_printf( ( "Waiting done\n" ) );
             IPStackEvent_t xEventMessage;
             const TickType_t xDontBlock = ( TickType_t ) 0;
+
+            FreeRTOS_printf( ( "Waiting done\n" ) );
 
             xEventMessage.eEventType = eNetworkRxEvent;
             xEventMessage.pvData = ( void * ) pxARPWaitingNetworkBuffer;
@@ -956,6 +964,7 @@
         ICMPPacket_IPv6_t * pxICMPPacket = ( ( ICMPPacket_IPv6_t * ) pxNetworkBuffer->pucEthernetBuffer );
         /* coverity[misra_c_2012_rule_11_3_violation] */
         ICMPHeader_IPv6_t * pxICMPHeader_IPv6 = ( ( ICMPHeader_IPv6_t * ) &( pxICMPPacket->xICMPHeaderIPv6 ) );
+        /* Note: pxNetworkBuffer->pxEndPoint is already verified to be non-NULL in prvProcessEthernetPacket() */
         NetworkEndPoint_t * pxEndPoint = pxNetworkBuffer->pxEndPoint;
         size_t uxNeededSize;
 
@@ -974,7 +983,7 @@
         }
         #endif /* ( ipconfigHAS_PRINTF == 1 ) */
 
-        if( ( pxEndPoint != NULL ) && ( pxEndPoint->bits.bIPv6 != pdFALSE_UNSIGNED ) )
+        if( pxEndPoint->bits.bIPv6 != pdFALSE_UNSIGNED )
         {
             switch( pxICMPHeader_IPv6->ucTypeOfMessage )
             {
@@ -1002,6 +1011,10 @@
                        }
 
                        pxICMPHeader_IPv6->ucTypeOfMessage = ipICMP_PING_REPLY_IPv6;
+
+                       /* MISRA Ref 4.14.1 [The validity of values received from external sources]. */
+                       /* More details at: https://github.com/FreeRTOS/FreeRTOS-Plus-TCP/blob/main/MISRA.md#directive-414. */
+                       /* coverity[misra_c_2012_directive_4_14_violation] */
                        prvReturnICMP_IPv6( pxNetworkBuffer, uxICMPSize );
                    }
                    break;
@@ -1046,20 +1059,18 @@
                    {
                        size_t uxICMPSize;
                        BaseType_t xCompare;
-                       NetworkEndPoint_t * pxEndPointFound = FreeRTOS_FindEndPointOnIP_IPv6( &( pxICMPHeader_IPv6->xIPv6Address ) );
-                       char pcName[ 40 ];
-                       ( void ) memset( &( pcName ), 0, sizeof( pcName ) );
-                       FreeRTOS_printf( ( "Lookup %pip : endpoint %s\n",
-                                          ( void * ) pxICMPHeader_IPv6->xIPv6Address.ucBytes,
-                                          pcEndpointName( pxEndPointFound, pcName, sizeof( pcName ) ) ) );
+                       const NetworkEndPoint_t * pxTargetedEndPoint = pxEndPoint;
+                       const NetworkEndPoint_t * pxEndPointInSameSubnet = FreeRTOS_InterfaceEPInSameSubnet_IPv6( pxNetworkBuffer->pxInterface, &( pxICMPHeader_IPv6->xIPv6Address ) );
 
-                       if( pxEndPointFound != NULL )
+                       if( pxEndPointInSameSubnet != NULL )
                        {
-                           pxEndPoint = pxEndPointFound;
+                           pxTargetedEndPoint = pxEndPointInSameSubnet;
                        }
-
-                       pxNetworkBuffer->pxEndPoint = pxEndPoint;
-                       pxNetworkBuffer->pxInterface = pxEndPoint->pxNetworkInterface;
+                       else
+                       {
+                           FreeRTOS_debug_printf( ( "prvProcessICMPMessage_IPv6: No match for %pip\n",
+                                                    pxICMPHeader_IPv6->xIPv6Address.ucBytes ) );
+                       }
 
                        uxICMPSize = sizeof( ICMPHeader_IPv6_t );
                        uxNeededSize = ( size_t ) ( ipSIZE_OF_ETH_HEADER + ipSIZE_OF_IPv6_HEADER + uxICMPSize );
@@ -1070,11 +1081,11 @@
                            break;
                        }
 
-                       xCompare = memcmp( pxICMPHeader_IPv6->xIPv6Address.ucBytes, pxEndPoint->ipv6_settings.xIPAddress.ucBytes, ipSIZE_OF_IPv6_ADDRESS );
+                       xCompare = memcmp( pxICMPHeader_IPv6->xIPv6Address.ucBytes, pxTargetedEndPoint->ipv6_settings.xIPAddress.ucBytes, ipSIZE_OF_IPv6_ADDRESS );
 
                        FreeRTOS_printf( ( "ND NS for %pip endpoint %pip %s\n",
                                           ( void * ) pxICMPHeader_IPv6->xIPv6Address.ucBytes,
-                                          ( void * ) pxEndPoint->ipv6_settings.xIPAddress.ucBytes,
+                                          ( void * ) pxNetworkBuffer->pxEndPoint->ipv6_settings.xIPAddress.ucBytes,
                                           ( xCompare == 0 ) ? "Reply" : "Ignore" ) );
 
                        if( xCompare == 0 )
@@ -1088,9 +1099,9 @@
                            pxICMPHeader_IPv6->ucOptionType = ndICMP_TARGET_LINK_LAYER_ADDRESS;
                            /* Length of option in units of 8 bytes. */
                            pxICMPHeader_IPv6->ucOptionLength = 1U;
-                           ( void ) memcpy( pxICMPHeader_IPv6->ucOptionBytes, pxEndPoint->xMACAddress.ucBytes, sizeof( MACAddress_t ) );
+                           ( void ) memcpy( pxICMPHeader_IPv6->ucOptionBytes, pxTargetedEndPoint->xMACAddress.ucBytes, sizeof( MACAddress_t ) );
                            pxICMPPacket->xIPHeader.ucHopLimit = 255U;
-                           ( void ) memcpy( pxICMPHeader_IPv6->xIPv6Address.ucBytes, pxEndPoint->ipv6_settings.xIPAddress.ucBytes, sizeof( pxICMPHeader_IPv6->xIPv6Address.ucBytes ) );
+                           ( void ) memcpy( pxICMPHeader_IPv6->xIPv6Address.ucBytes, pxTargetedEndPoint->ipv6_settings.xIPAddress.ucBytes, sizeof( pxICMPHeader_IPv6->xIPv6Address.ucBytes ) );
                            prvReturnICMP_IPv6( pxNetworkBuffer, uxICMPSize );
                        }
                    }
@@ -1134,7 +1145,7 @@
                     /* All possible values are included here above. */
                     break;
             } /* switch( pxICMPHeader_IPv6->ucTypeOfMessage ) */
-        }     /* if( pxEndPoint != NULL ) */
+        }     /* if( pxEndPoint->bits.bIPv6 != pdFALSE_UNSIGNED ) */
 
         return eReleaseBuffer;
     }
@@ -1272,6 +1283,7 @@
 
         if( xResult == pdPASS )
         {
+            size_t uxIndex;
             /* A loopback IP-address has a prefix of 128. */
             configASSERT( ( uxPrefixLength > 0U ) && ( uxPrefixLength <= ( 8U * ipSIZE_OF_IPv6_ADDRESS ) ) );
 
@@ -1281,7 +1293,7 @@
             }
 
             pucSource = ( uint8_t * ) pulRandom;
-            size_t uxIndex = uxPrefixLength / 8U;
+            uxIndex = uxPrefixLength / 8U;
 
             if( ( uxPrefixLength % 8U ) != 0U )
             {

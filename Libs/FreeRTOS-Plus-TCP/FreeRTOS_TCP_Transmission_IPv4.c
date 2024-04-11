@@ -99,6 +99,8 @@ void prvTCPReturnPacket_IPV4( FreeRTOS_Socket_t * pxSocket,
     void * pvCopyDest = NULL;
     const size_t uxIPHeaderSize = ipSIZE_OF_IPv4_HEADER;
     uint32_t ulDestinationIPAddress;
+    eARPLookupResult_t eResult;
+    NetworkEndPoint_t * pxEndPoint = NULL;
 
     do
     {
@@ -148,6 +150,8 @@ void prvTCPReturnPacket_IPV4( FreeRTOS_Socket_t * pxSocket,
             if( pxNetworkBuffer != NULL ) /* LCOV_EXCL_BR_LINE the 2nd branch will never be reached */
         #endif
         {
+            NetworkInterface_t * pxInterface;
+
             /* Map the Ethernet buffer onto a TCPPacket_t struct for easy access to the fields. */
 
             /* MISRA Ref 11.3.1 [Misaligned access] */
@@ -166,12 +170,6 @@ void prvTCPReturnPacket_IPV4( FreeRTOS_Socket_t * pxSocket,
 
                 if( pxNetworkBuffer->pxEndPoint == NULL )
                 {
-                    if( xDoRelease != pdFALSE )
-                    {
-                        vReleaseNetworkBufferAndDescriptor( pxNetworkBuffer );
-                    }
-
-                    pxNetworkBuffer = NULL;
                     break;
                 }
             }
@@ -234,17 +232,22 @@ void prvTCPReturnPacket_IPV4( FreeRTOS_Socket_t * pxSocket,
 
             pvCopySource = &pxEthernetHeader->xSourceAddress;
             ulDestinationIPAddress = pxIPHeader->ulDestinationIPAddress;
-            eARPLookupResult_t eResult;
 
-            eResult = eARPGetCacheEntry( &ulDestinationIPAddress, &xMACAddress, &( pxNetworkBuffer->pxEndPoint ) );
+            eResult = eARPGetCacheEntry( &ulDestinationIPAddress, &xMACAddress, &pxEndPoint );
 
             if( eResult == eARPCacheHit )
             {
                 pvCopySource = &xMACAddress;
+                pxNetworkBuffer->pxEndPoint = pxEndPoint;
             }
             else
             {
                 pvCopySource = &pxEthernetHeader->xSourceAddress;
+            }
+
+            if( pxNetworkBuffer->pxEndPoint == NULL )
+            {
+                break;
             }
 
             /* Fill in the destination MAC addresses. */
@@ -283,7 +286,7 @@ void prvTCPReturnPacket_IPV4( FreeRTOS_Socket_t * pxSocket,
             configASSERT( pxNetworkBuffer->pxEndPoint->pxNetworkInterface != NULL );
             configASSERT( pxNetworkBuffer->pxEndPoint->pxNetworkInterface->pfOutput != NULL );
 
-            NetworkInterface_t * pxInterface = pxNetworkBuffer->pxEndPoint->pxNetworkInterface;
+            pxInterface = pxNetworkBuffer->pxEndPoint->pxNetworkInterface;
             ( void ) pxInterface->pfOutput( pxInterface, pxNetworkBuffer, xDoRelease );
 
             if( xDoRelease == pdFALSE )
@@ -298,10 +301,16 @@ void prvTCPReturnPacket_IPV4( FreeRTOS_Socket_t * pxSocket,
             }
             else
             {
-                /* Nothing to do: the buffer has been passed to DMA and will be released after use */
+                xDoRelease = pdFALSE;
+                /* The buffer has been passed to DMA and will be released after use */
             }
         } /* if( pxNetworkBuffer != NULL ) */
     } while( ipFALSE_BOOL );
+
+    if( xDoRelease == pdTRUE )
+    {
+        vReleaseNetworkBufferAndDescriptor( pxNetworkBuffer );
+    }
 }
 /*-----------------------------------------------------------*/
 
