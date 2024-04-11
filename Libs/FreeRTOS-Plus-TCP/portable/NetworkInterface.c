@@ -602,6 +602,7 @@ static BaseType_t prvNetworkInterfaceOutput( NetworkInterface_t * pxInterface,
             break;
         }
 
+        // ETH_TxPacketConfigTypedef
         ETH_TxPacketConfig xTxConfig =
         {
             .CRCPadCtrl = ETH_CRC_PAD_INSERT,

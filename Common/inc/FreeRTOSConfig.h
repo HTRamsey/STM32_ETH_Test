@@ -1,7 +1,14 @@
 #ifndef FREERTOS_CONFIG_H
 #define FREERTOS_CONFIG_H
 
-#include <stm32f7xx.h>
+#include "main.h"
+#if defined( STM32F7 )
+    #include <stm32f7xx.h>
+#elif defined( STM32H7 )
+    #include <stm32h7xx.h>
+#elif defined( STM32H5 )
+	#include <stm32h5xx.h>
+#endif
 
 // #define FREERTOS_TASKS_C_ADDITIONS_INIT
 // freertos_tasks_c_additions_init.h
